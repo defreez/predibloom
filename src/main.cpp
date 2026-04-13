@@ -1,4 +1,6 @@
 #include "raylib.h"
+#include "app.hpp"
+#include "ui/theme.hpp"
 
 int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
@@ -6,10 +8,14 @@ int main() {
     MaximizeWindow();
     SetTargetFPS(60);
 
+    predibloom::App app;
+
     while (!WindowShouldClose()) {
+        app.Update(GetFrameTime());
+
         BeginDrawing();
-        ClearBackground(RAYWHITE);
-        DrawText("Predibloom - Kalshi Market Viewer", 20, 20, 20, DARKGRAY);
+        ClearBackground(ui::theme().bg_dark);
+        app.Draw();
         EndDrawing();
     }
 

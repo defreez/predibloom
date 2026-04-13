@@ -34,7 +34,10 @@ FetchContent_MakeAvailable(json)
 # Find OpenSSL for cpp-httplib HTTPS support
 find_package(OpenSSL REQUIRED)
 
-add_executable(predibloom src/main.cpp)
+add_executable(predibloom
+    src/main.cpp
+    src/app.cpp
+)
 
 target_link_libraries(predibloom PRIVATE
     raylib
