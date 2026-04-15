@@ -31,22 +31,64 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# CLI11 v2.4.2
+FetchContent_Declare(
+    cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG v2.4.2
+)
+FetchContent_MakeAvailable(cli11)
+
 # Find OpenSSL for cpp-httplib HTTPS support
 find_package(OpenSSL REQUIRED)
 
-add_executable(predibloom
-    src/main.cpp
-    src/app.cpp
+# Shared core library (API client + service layer)
+add_library(predibloom_core STATIC
+    src/api/kalshi_client.cpp
+    src/core/service.cpp
 )
 
-target_link_libraries(predibloom PRIVATE
-    raylib
+target_include_directories(predibloom_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(predibloom_core PUBLIC
     httplib::httplib
     nlohmann_json::nlohmann_json
     OpenSSL::SSL
     OpenSSL::Crypto
 )
 
-target_compile_definitions(predibloom PRIVATE
+target_compile_definitions(predibloom_core PUBLIC
     CPPHTTPLIB_OPENSSL_SUPPORT
+)
+
+# GUI executable
+add_executable(predibloom
+    src/gui/main.cpp
+    src/gui/app.cpp
+)
+
+target_link_libraries(predibloom PRIVATE
+    predibloom_core
+    raylib
+)
+
+# CLI executable
+add_executable(predibloom-cli
+    src/cli/main.cpp
+)
+
+target_link_libraries(predibloom-cli PRIVATE
+    predibloom_core
+    CLI11::CLI11
+)
+
+# CLI test for API client (no GUI dependencies)
+add_executable(test_api
+    src/api/test_client.cpp
+)
+
+target_link_libraries(test_api PRIVATE
+    predibloom_core
 )

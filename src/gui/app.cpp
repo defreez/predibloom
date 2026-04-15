@@ -1,5 +1,5 @@
 #include "app.hpp"
-#include "ui/theme.hpp"
+#include "../ui/theme.hpp"
 #include "raylib.h"
 
 namespace predibloom {
