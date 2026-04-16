@@ -13,7 +13,11 @@ namespace predibloom {
 
 App::App()
     : client_(std::make_unique<api::KalshiClient>()),
-      service_(std::make_unique<core::MarketService>(*client_)) {
+      service_(std::make_unique<core::MarketService>(*client_)),
+      config_(core::Config::load()) {
+    if (!config_.tracked.empty()) {
+        current_series_label_ = config_.tracked[0].label;
+    }
     fetchMarkets();
 }
 
@@ -169,6 +173,11 @@ void App::fetchMarkets() {
     filter.status = "open";
     filter.limit = 50;
 
+    // Use series_ticker from config if available
+    if (!config_.tracked.empty()) {
+        filter.series_ticker = config_.tracked[0].series_ticker;
+    }
+
     auto result = service_->listMarkets(filter);
     is_loading_ = false;
 
@@ -302,6 +311,14 @@ void App::DrawToolbar(int x, int y, int w, int h) const {
     DrawRectangle(x, y, w, h, t.bg_panel);
     DrawLine(x, y + h - 1, x + w, y + h - 1, t.border);
     DrawText("PREDIBLOOM", x + 10, y + 8, t.font_header, t.accent);
+
+    // Show current series label
+    if (!current_series_label_.empty()) {
+        int title_width = MeasureText("PREDIBLOOM", t.font_header);
+        DrawText("|", x + 20 + title_width, y + 8, t.font_header, t.border);
+        DrawText(current_series_label_.c_str(), x + 35 + title_width, y + 12,
+                 t.font_body, t.text);
+    }
 }
 
 void App::DrawLeftPanel(int x, int y, int w, int h) const {

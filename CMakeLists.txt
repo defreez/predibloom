@@ -46,6 +46,7 @@ find_package(OpenSSL REQUIRED)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
     src/core/service.cpp
+    src/core/config.cpp
 )
 
 target_include_directories(predibloom_core PUBLIC

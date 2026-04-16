@@ -26,38 +26,39 @@ struct Market {
     std::string title;
     std::string subtitle;
     std::string status;
-    std::string yes_bid;
-    std::string yes_ask;
-    std::string no_bid;
-    std::string no_ask;
-    std::string last_price;
-    std::string volume;
-    std::string volume_24h;
+    std::string yes_bid_dollars;
+    std::string yes_ask_dollars;
+    std::string no_bid_dollars;
+    std::string no_ask_dollars;
+    std::string last_price_dollars;
+    std::string volume_fp;
+    std::string volume_24h_fp;
 
     double yes_bid_cents() const {
-        return std::atof(yes_bid.c_str()) * 100.0;
+        return std::atof(yes_bid_dollars.c_str()) * 100.0;
     }
 
     double yes_ask_cents() const {
-        return std::atof(yes_ask.c_str()) * 100.0;
+        return std::atof(yes_ask_dollars.c_str()) * 100.0;
     }
 
     double no_bid_cents() const {
-        return std::atof(no_bid.c_str()) * 100.0;
+        return std::atof(no_bid_dollars.c_str()) * 100.0;
     }
 
     double no_ask_cents() const {
-        return std::atof(no_ask.c_str()) * 100.0;
+        return std::atof(no_ask_dollars.c_str()) * 100.0;
     }
 
     double last_price_cents() const {
-        return std::atof(last_price.c_str()) * 100.0;
+        return std::atof(last_price_dollars.c_str()) * 100.0;
     }
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Market,
     ticker, event_ticker, market_type, title, subtitle, status,
-    yes_bid, yes_ask, no_bid, no_ask, last_price, volume, volume_24h)
+    yes_bid_dollars, yes_ask_dollars, no_bid_dollars, no_ask_dollars,
+    last_price_dollars, volume_fp, volume_24h_fp)
 
 struct OrderbookLevel {
     std::string price;

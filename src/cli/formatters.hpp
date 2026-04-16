@@ -69,13 +69,13 @@ inline void printMarketsJson(const std::vector<api::Market>& markets) {
             {"title", m.title},
             {"subtitle", m.subtitle},
             {"status", m.status},
-            {"yes_bid", m.yes_bid},
-            {"yes_ask", m.yes_ask},
-            {"no_bid", m.no_bid},
-            {"no_ask", m.no_ask},
-            {"last_price", m.last_price},
-            {"volume", m.volume},
-            {"volume_24h", m.volume_24h}
+            {"yes_bid", m.yes_bid_dollars},
+            {"yes_ask", m.yes_ask_dollars},
+            {"no_bid", m.no_bid_dollars},
+            {"no_ask", m.no_ask_dollars},
+            {"last_price", m.last_price_dollars},
+            {"volume", m.volume_fp},
+            {"volume_24h", m.volume_24h_fp}
         });
     }
     std::cout << arr.dump(2) << "\n";
@@ -96,10 +96,10 @@ inline void printMarketsCsv(const std::vector<api::Market>& markets) {
                   << m.event_ticker << ","
                   << "\"" << title << "\","
                   << m.status << ","
-                  << m.yes_bid << ","
-                  << m.yes_ask << ","
-                  << m.last_price << ","
-                  << m.volume << "\n";
+                  << m.yes_bid_dollars << ","
+                  << m.yes_ask_dollars << ","
+                  << m.last_price_dollars << ","
+                  << m.volume_fp << "\n";
     }
 }
 
@@ -247,13 +247,13 @@ inline void printMarketDetail(const api::Market& m, OutputFormat fmt) {
             {"title", m.title},
             {"subtitle", m.subtitle},
             {"status", m.status},
-            {"yes_bid", m.yes_bid},
-            {"yes_ask", m.yes_ask},
-            {"no_bid", m.no_bid},
-            {"no_ask", m.no_ask},
-            {"last_price", m.last_price},
-            {"volume", m.volume},
-            {"volume_24h", m.volume_24h}
+            {"yes_bid", m.yes_bid_dollars},
+            {"yes_ask", m.yes_ask_dollars},
+            {"no_bid", m.no_bid_dollars},
+            {"no_ask", m.no_ask_dollars},
+            {"last_price", m.last_price_dollars},
+            {"volume", m.volume_fp},
+            {"volume_24h", m.volume_24h_fp}
         };
         std::cout << j.dump(2) << "\n";
         return;
@@ -271,7 +271,7 @@ inline void printMarketDetail(const api::Market& m, OutputFormat fmt) {
     std::cout << "NO:         " << formatPrice(m.no_bid_cents())
               << " bid / " << formatPrice(m.no_ask_cents()) << " ask\n";
     std::cout << "Last:       " << formatPrice(m.last_price_cents()) << "\n";
-    std::cout << "Volume:     " << m.volume << " (24h: " << m.volume_24h << ")\n";
+    std::cout << "Volume:     " << m.volume_fp << " (24h: " << m.volume_24h_fp << ")\n";
 }
 
 } // namespace predibloom::cli

@@ -7,6 +7,7 @@
 #include <queue>
 #include "../api/kalshi_client.hpp"
 #include "../core/service.hpp"
+#include "../core/config.hpp"
 #include "../api/types.hpp"
 #include "raylib.h"
 
@@ -42,6 +43,8 @@ private:
     // Service layer
     std::unique_ptr<api::KalshiClient> client_;
     std::unique_ptr<core::MarketService> service_;
+    core::Config config_;
+    std::string current_series_label_;
 
     // Market list state
     std::vector<api::Market> markets_;

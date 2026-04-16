@@ -19,12 +19,14 @@ int main(int argc, char** argv) {
     // Markets command options
     std::string markets_status = "open";
     std::string markets_event_ticker;
+    std::string markets_series_ticker;
     int markets_limit = 10;
     std::string markets_format = "table";
 
     markets_cmd->add_option("-s,--status", markets_status, "Filter by status (open, closed, settled)")
         ->default_val("open");
     markets_cmd->add_option("-e,--event", markets_event_ticker, "Filter by event ticker");
+    markets_cmd->add_option("--series-ticker", markets_series_ticker, "Filter by series ticker");
     markets_cmd->add_option("-n,--limit", markets_limit, "Number of results")
         ->default_val(10)
         ->check(CLI::Range(1, 1000));
@@ -84,6 +86,9 @@ int main(int argc, char** argv) {
         filter.status = markets_status;
         if (!markets_event_ticker.empty()) {
             filter.event_ticker = markets_event_ticker;
+        }
+        if (!markets_series_ticker.empty()) {
+            filter.series_ticker = markets_series_ticker;
         }
         filter.limit = markets_limit;
 
