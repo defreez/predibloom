@@ -173,4 +173,63 @@ Result<std::vector<Market>> KalshiClient::getAllMarkets(const GetMarketsParams& 
     return all_markets;
 }
 
+Result<TradesResponse> KalshiClient::getTrades(const GetTradesParams& params) {
+    rate_limiter_.wait_for_token();
+
+    std::ostringstream path;
+    path << API_BASE << "/markets/trades?ticker=" << params.ticker;
+    if (params.limit) path << "&limit=" << *params.limit;
+    if (params.cursor) path << "&cursor=" << *params.cursor;
+
+    auto res = client_->Get(path.str());
+
+    if (!res) {
+        return Error(ApiError::NetworkError,
+            "Network error: " + httplib::to_string(res.error()));
+    }
+
+    if (res->status == 429) {
+        return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
+    }
+
+    if (res->status != 200) {
+        return Error(ApiError::HttpError,
+            "HTTP error: " + std::to_string(res->status), res->status);
+    }
+
+    try {
+        auto json = nlohmann::json::parse(res->body);
+        return json.get<TradesResponse>();
+    } catch (const nlohmann::json::exception& e) {
+        return Error(ApiError::ParseError,
+            std::string("JSON parse error: ") + e.what());
+    }
+}
+
+Result<std::vector<Trade>> KalshiClient::getAllTrades(const std::string& ticker) {
+    std::vector<Trade> all_trades;
+    GetTradesParams params;
+    params.ticker = ticker;
+    params.limit = 1000;
+
+    while (true) {
+        auto result = getTrades(params);
+        if (!result.ok()) {
+            return result.error();
+        }
+
+        auto& response = result.value();
+        all_trades.insert(all_trades.end(),
+            response.trades.begin(), response.trades.end());
+
+        if (!response.has_more()) {
+            break;
+        }
+
+        params.cursor = response.cursor;
+    }
+
+    return all_trades;
+}
+
 } // namespace predibloom::api

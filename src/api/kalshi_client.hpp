@@ -28,6 +28,12 @@ struct GetMarketsParams {
     std::optional<int> limit;
 };
 
+struct GetTradesParams {
+    std::string ticker;
+    std::optional<std::string> cursor;
+    std::optional<int> limit;
+};
+
 class KalshiClient {
 public:
     KalshiClient();
@@ -40,6 +46,8 @@ public:
     Result<MarketsResponse> getMarkets(const GetMarketsParams& params = {});
     Result<Orderbook> getOrderbook(const std::string& ticker, int depth = 0);
     Result<std::vector<Market>> getAllMarkets(const GetMarketsParams& params = {});
+    Result<TradesResponse> getTrades(const GetTradesParams& params);
+    Result<std::vector<Trade>> getAllTrades(const std::string& ticker);
 
 private:
     std::string buildQueryString(const GetEventsParams& params);

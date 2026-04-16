@@ -169,4 +169,42 @@ inline void from_json(const nlohmann::json& j, OrderbookResponse& r) {
     }
 }
 
+struct Trade {
+    std::string trade_id;
+    std::string ticker;
+    std::string created_time;
+    std::string yes_price_dollars;
+    std::string no_price_dollars;
+    std::string count_fp;
+    std::string taker_side;
+
+    double yes_price_cents() const {
+        return std::atof(yes_price_dollars.c_str()) * 100.0;
+    }
+};
+
+inline void from_json(const nlohmann::json& j, Trade& t) {
+    if (j.contains("trade_id")) j.at("trade_id").get_to(t.trade_id);
+    if (j.contains("ticker")) j.at("ticker").get_to(t.ticker);
+    if (j.contains("created_time")) j.at("created_time").get_to(t.created_time);
+    if (j.contains("yes_price_dollars")) j.at("yes_price_dollars").get_to(t.yes_price_dollars);
+    if (j.contains("no_price_dollars")) j.at("no_price_dollars").get_to(t.no_price_dollars);
+    if (j.contains("count_fp")) j.at("count_fp").get_to(t.count_fp);
+    if (j.contains("taker_side")) j.at("taker_side").get_to(t.taker_side);
+}
+
+struct TradesResponse {
+    std::vector<Trade> trades;
+    std::string cursor;
+
+    bool has_more() const {
+        return !cursor.empty();
+    }
+};
+
+inline void from_json(const nlohmann::json& j, TradesResponse& r) {
+    if (j.contains("trades")) j.at("trades").get_to(r.trades);
+    if (j.contains("cursor") && !j.at("cursor").is_null()) j.at("cursor").get_to(r.cursor);
+}
+
 } // namespace predibloom::api
