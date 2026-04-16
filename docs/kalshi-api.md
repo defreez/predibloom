@@ -69,16 +69,39 @@ To get a meaningful pre-settlement price:
 
 ## Candlesticks
 
+**IMPORTANT: Candlesticks are EMPTY for settled markets. Use trades instead.**
+
+For live/open markets only:
+```bash
+curl "https://api.elections.kalshi.com/trade-api/v2/series/KXHIGHNY/markets/KXHIGHNY-26APR16-T91/candlesticks?period_interval=60&start_ts=START&end_ts=END"
+```
+
 Parameters:
 - `period_interval`: 1 (minute), 60 (hour), 1440 (day)
 - `start_ts` / `end_ts`: Unix timestamps
 
-```bash
-# Live market candlesticks
-curl "https://api.elections.kalshi.com/trade-api/v2/series/KXHIGHNY/markets/KXHIGHNY-26APR16-T91/candlesticks?period_interval=60&start_ts=1744700000&end_ts=1744800000"
+## Hourly Prices for Settled Markets (USE THIS)
 
-# Historical market candlesticks
-curl "https://api.elections.kalshi.com/trade-api/v2/historical/markets/{ticker}/candlesticks?period_interval=1440&start_ts=X&end_ts=Y"
+Candlesticks don't work for settled markets. Fetch trades and aggregate by hour:
+
+```bash
+curl "https://api.elections.kalshi.com/trade-api/v2/markets/trades?ticker=KXHIGHNY-26MAR10-T73&limit=1000"
+```
+
+Then group by hour in code, or with jq:
+```bash
+curl ... | jq '[.trades[] | {ts: .created_time, price: .yes_price_dollars}] | group_by(.ts[:13]) | map({hour: .[0].ts[:13], price: .[0].price})'
+```
+
+Example output:
+```json
+[
+  {"hour": "2026-03-10T12", "price": "0.8500"},
+  {"hour": "2026-03-10T13", "price": "0.8000"},
+  {"hour": "2026-03-10T14", "price": "0.8700"},
+  {"hour": "2026-03-10T15", "price": "0.9800"},
+  {"hour": "2026-03-10T16", "price": "0.9900"}
+]
 ```
 
 ## KXHIGHNY (NYC High Temp) Markets
