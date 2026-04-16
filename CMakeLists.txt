@@ -46,6 +46,7 @@ find_package(OpenSSL REQUIRED)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
     src/api/openmeteo_client.cpp
+    src/api/nws_client.cpp
     src/core/service.cpp
     src/core/config.cpp
     src/core/weather_comparison.cpp
