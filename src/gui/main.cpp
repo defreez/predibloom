@@ -1,24 +1,17 @@
 #include "raylib.h"
 #include "app.hpp"
 #include "../ui/theme.hpp"
-#include "../api/kalshi_client.hpp"
-#include <cstdio>
+#include <cstring>
 
-int main() {
-    // Test API client before opening window
-    printf("Testing Kalshi API client...\n");
-    predibloom::api::KalshiClient client;
-    auto result = client.getMarkets({.status = "open", .limit = 5});
-    if (result.ok()) {
-        printf("Fetched %zu markets:\n", result.value().markets.size());
-        for (const auto& m : result.value().markets) {
-            printf("  %s: %.0fc bid / %.0fc ask\n",
-                   m.ticker.c_str(), m.yes_bid_cents(), m.yes_ask_cents());
+int main(int argc, char** argv) {
+    bool enable_control = false;
+
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--control") == 0) {
+            enable_control = true;
         }
-    } else {
-        printf("API error: %s\n", result.error().message.c_str());
     }
-    printf("\n");
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(1280, 720, "Predibloom");
@@ -27,7 +20,15 @@ int main() {
 
     predibloom::App app;
 
+    if (enable_control) {
+        app.initControlSocket();
+    }
+
     while (!WindowShouldClose()) {
+        if (enable_control) {
+            app.handleControlCommands();
+        }
+
         app.Update(GetFrameTime());
 
         BeginDrawing();

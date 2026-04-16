@@ -1,0 +1,15 @@
+[project]
+name = "predibloom-mcp"
+version = "0.1.0"
+description = "MCP server for predibloom GUI automation"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+predibloom-mcp = "predibloom_mcp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
