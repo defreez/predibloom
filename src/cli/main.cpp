@@ -5,6 +5,7 @@
 #include "../core/weather_comparison.hpp"
 #include "formatters.hpp"
 #include <iostream>
+#include <map>
 
 int main(int argc, char** argv) {
     CLI::App app{"predibloom - Kalshi market viewer"};
@@ -18,6 +19,7 @@ int main(int argc, char** argv) {
     auto* orderbook_cmd = app.add_subcommand("orderbook", "Show orderbook for a market");
     auto* market_cmd = app.add_subcommand("market", "Show details for a single market");
     auto* compare_cmd = app.add_subcommand("compare", "Compare Kalshi prices with weather data");
+    auto* history_cmd = app.add_subcommand("history", "Hourly price history for all brackets");
 
     // Markets command options
     std::string markets_status = "open";
@@ -89,6 +91,18 @@ int main(int argc, char** argv) {
     compare_cmd->add_option("-f,--format", compare_format, "Output format: table|json|csv")
         ->default_val("table")
         ->check(CLI::IsMember({"table", "json", "csv"}));
+
+    // History command options
+    std::string history_series;
+    std::string history_start;
+    std::string history_end;
+
+    history_cmd->add_option("-s,--series", history_series, "Series ticker (e.g., KXHIGHNY)")
+        ->required();
+    history_cmd->add_option("--start", history_start, "Start date YYYY-MM-DD")
+        ->required();
+    history_cmd->add_option("--end", history_end, "End date YYYY-MM-DD")
+        ->required();
 
     // Require at least one subcommand
     app.require_subcommand(1);
@@ -176,6 +190,62 @@ int main(int argc, char** argv) {
 
         predibloom::cli::printComparison(result.value(),
             predibloom::cli::parseFormat(compare_format));
+    }
+
+    // Handle history command
+    if (*history_cmd) {
+        // Get all markets for the series
+        predibloom::api::GetMarketsParams params;
+        params.series_ticker = history_series;
+
+        auto markets_result = client.getAllMarkets(params);
+        if (!markets_result.ok()) {
+            std::cerr << "Error fetching markets: " << markets_result.error().message << "\n";
+            return 1;
+        }
+
+        // Output CSV header
+        std::cout << "timestamp,ticker,strike,price_cents\n";
+
+        // For each market, fetch trades and output hourly prices
+        for (const auto& market : markets_result.value()) {
+            // Parse ticker to get date
+            auto ticker_info = predibloom::core::parseHighNYTicker(market.ticker);
+            if (!ticker_info.valid) continue;
+
+            // Filter by date range
+            if (ticker_info.date < history_start || ticker_info.date > history_end) continue;
+
+            // Fetch all trades for this market
+            auto trades_result = client.getAllTrades(market.ticker);
+            if (!trades_result.ok()) {
+                std::cerr << "Error fetching trades for " << market.ticker << "\n";
+                continue;
+            }
+
+            // Group trades by hour and output
+            std::map<std::string, double> hourly_prices;
+            for (const auto& trade : trades_result.value()) {
+                // Extract hour from timestamp (YYYY-MM-DDTHH)
+                std::string hour = trade.created_time.substr(0, 13);
+                hourly_prices[hour] = trade.yes_price_cents();
+            }
+
+            // Format strike
+            std::string strike;
+            if (market.floor_strike && !market.cap_strike) {
+                strike = std::to_string(*market.floor_strike) + "+";
+            } else if (!market.floor_strike && market.cap_strike) {
+                strike = "<" + std::to_string(*market.cap_strike);
+            } else if (market.floor_strike && market.cap_strike) {
+                strike = std::to_string(*market.floor_strike) + "-" + std::to_string(*market.cap_strike);
+            }
+
+            // Output each hour
+            for (const auto& [hour, price] : hourly_prices) {
+                std::cout << hour << "," << market.ticker << "," << strike << "," << price << "\n";
+            }
+        }
     }
 
     return 0;
