@@ -5,6 +5,7 @@
 #include "../core/weather_comparison.hpp"
 #include "formatters.hpp"
 #include <iostream>
+#include <iomanip>
 #include <map>
 
 int main(int argc, char** argv) {
@@ -20,6 +21,7 @@ int main(int argc, char** argv) {
     auto* market_cmd = app.add_subcommand("market", "Show details for a single market");
     auto* compare_cmd = app.add_subcommand("compare", "Compare Kalshi prices with weather data");
     auto* history_cmd = app.add_subcommand("history", "Hourly price history for all brackets");
+    auto* winners_cmd = app.add_subcommand("winners", "Price history for settled brackets with weather overlay");
 
     // Markets command options
     std::string markets_status = "open";
@@ -102,6 +104,18 @@ int main(int argc, char** argv) {
     history_cmd->add_option("--start", history_start, "Start date YYYY-MM-DD")
         ->required();
     history_cmd->add_option("--end", history_end, "End date YYYY-MM-DD")
+        ->required();
+
+    // Winners command options
+    std::string winners_series;
+    std::string winners_start;
+    std::string winners_end;
+
+    winners_cmd->add_option("-s,--series", winners_series, "Series ticker (e.g., KXHIGHNY)")
+        ->required();
+    winners_cmd->add_option("--start", winners_start, "Start date YYYY-MM-DD")
+        ->required();
+    winners_cmd->add_option("--end", winners_end, "End date YYYY-MM-DD")
         ->required();
 
     // Require at least one subcommand
@@ -250,6 +264,103 @@ int main(int argc, char** argv) {
 
             processed++;
             std::cerr << "\rProcessed " << processed << "/" << total << " markets" << std::flush;
+        }
+        std::cerr << "\n";
+    }
+
+    // Handle winners command
+    if (*winners_cmd) {
+        predibloom::api::OpenMeteoClient openmeteo;
+
+        // Get all markets for the series
+        predibloom::api::GetMarketsParams params;
+        params.series_ticker = winners_series;
+
+        auto markets_result = client.getAllMarkets(params);
+        if (!markets_result.ok()) {
+            std::cerr << "Error fetching markets: " << markets_result.error().message << "\n";
+            return 1;
+        }
+
+        // Group markets by date and find winners (settled YES)
+        std::map<std::string, predibloom::api::Market> winners;  // date -> winning market
+        for (const auto& market : markets_result.value()) {
+            if (market.result != "yes") continue;
+
+            auto ticker_info = predibloom::core::parseHighNYTicker(market.ticker);
+            if (!ticker_info.valid) continue;
+            if (ticker_info.date < winners_start || ticker_info.date > winners_end) continue;
+
+            winners[ticker_info.date] = market;
+        }
+
+        std::cerr << "Found " << winners.size() << " winning brackets\n";
+
+        // Fetch weather data for full range
+        auto forecast_result = openmeteo.getHistoricalForecast(
+            predibloom::core::NYC_LATITUDE, predibloom::core::NYC_LONGITUDE,
+            winners_start, winners_end);
+
+        auto actual_result = openmeteo.getHistoricalWeather(
+            predibloom::core::NYC_LATITUDE, predibloom::core::NYC_LONGITUDE,
+            winners_start, winners_end);
+
+        // Output CSV header
+        std::cout << "timestamp,date,ticker,strike,price_cents,forecast_high,actual_high\n";
+
+        int processed = 0;
+        for (const auto& [date, market] : winners) {
+            // Get forecast and actual for this date
+            std::optional<double> forecast_high, actual_high;
+            if (forecast_result.ok()) {
+                forecast_high = predibloom::api::getTemperatureForDate(forecast_result.value(), date);
+            }
+            if (actual_result.ok()) {
+                actual_high = predibloom::api::getTemperatureForDate(actual_result.value(), date);
+            }
+
+            // Format strike
+            std::string strike;
+            if (market.floor_strike && !market.cap_strike) {
+                strike = std::to_string(*market.floor_strike) + "+";
+            } else if (!market.floor_strike && market.cap_strike) {
+                strike = "<" + std::to_string(*market.cap_strike);
+            } else if (market.floor_strike && market.cap_strike) {
+                strike = std::to_string(*market.floor_strike) + "-" + std::to_string(*market.cap_strike);
+            }
+
+            // Fetch trades for this market
+            auto trades_result = client.getAllTrades(market.ticker);
+            if (!trades_result.ok()) {
+                std::cerr << "Error fetching trades for " << market.ticker << "\n";
+                continue;
+            }
+
+            // Group trades by hour
+            std::map<std::string, double> hourly_prices;
+            for (const auto& trade : trades_result.value()) {
+                std::string hour = trade.created_time.substr(0, 13);
+                hourly_prices[hour] = trade.yes_price_cents();
+            }
+
+            // Output each hour
+            for (const auto& [hour, price] : hourly_prices) {
+                std::cout << hour << "," << date << "," << market.ticker << "," << strike << "," << price;
+                if (forecast_high) {
+                    std::cout << "," << std::fixed << std::setprecision(1) << *forecast_high;
+                } else {
+                    std::cout << ",";
+                }
+                if (actual_high) {
+                    std::cout << "," << std::fixed << std::setprecision(1) << *actual_high;
+                } else {
+                    std::cout << ",";
+                }
+                std::cout << "\n";
+            }
+
+            processed++;
+            std::cerr << "\rProcessed " << processed << "/" << winners.size() << " winners" << std::flush;
         }
         std::cerr << "\n";
     }
