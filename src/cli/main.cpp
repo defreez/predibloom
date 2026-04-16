@@ -464,17 +464,36 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Group markets by date
+        // Group markets by date (parse from event_ticker like KXHIGHNY-26APR10)
         std::map<std::string, std::vector<predibloom::api::Market>> markets_by_date;
+        static const std::map<std::string, std::string> month_to_num = {
+            {"JAN", "01"}, {"FEB", "02"}, {"MAR", "03"}, {"APR", "04"},
+            {"MAY", "05"}, {"JUN", "06"}, {"JUL", "07"}, {"AUG", "08"},
+            {"SEP", "09"}, {"OCT", "10"}, {"NOV", "11"}, {"DEC", "12"}
+        };
+
         for (const auto& market : markets_result.value()) {
             // Settled markets have status "finalized" and a result
             if (market.result.empty()) continue;
 
-            auto ticker_info = predibloom::core::parseHighNYTicker(market.ticker);
-            if (!ticker_info.valid) continue;
-            if (ticker_info.date < backtest_start || ticker_info.date > backtest_end) continue;
+            // Parse date from event_ticker (e.g., KXHIGHNY-26APR10)
+            std::string et = market.event_ticker;
+            if (et.size() < 15) continue;  // KXHIGHNY-YYMMMDD = 15 chars min
 
-            markets_by_date[ticker_info.date].push_back(market);
+            size_t dash = et.rfind('-');
+            if (dash == std::string::npos || dash + 7 > et.size()) continue;
+
+            std::string yy = et.substr(dash + 1, 2);
+            std::string mmm = et.substr(dash + 3, 3);
+            std::string dd = et.substr(dash + 6, 2);
+
+            auto it = month_to_num.find(mmm);
+            if (it == month_to_num.end()) continue;
+
+            std::string date = "20" + yy + "-" + it->second + "-" + dd;
+            if (date < backtest_start || date > backtest_end) continue;
+
+            markets_by_date[date].push_back(market);
         }
 
         std::cerr << "Found " << markets_by_date.size() << " trading days\n";
@@ -542,43 +561,75 @@ int main(int argc, char** argv) {
             }
             int nws_actual = nws_highs.at(date);
 
-            // Find the bracket our adjusted forecast falls into
-            const predibloom::api::Market* target_market = nullptr;
-            double margin_from_edge = 0;
+            // Parse brackets from subtitle (API doesn't always populate floor/cap_strike)
+            struct ParsedBracket {
+                const predibloom::api::Market* market;
+                std::optional<int> floor;
+                std::optional<int> cap;
+                std::string strike_str;
+            };
+            std::vector<ParsedBracket> parsed_brackets;
 
             for (const auto& market : day_markets) {
+                ParsedBracket b;
+                b.market = &market;
+                std::string sub = market.subtitle;
+
+                if (sub.find("or above") != std::string::npos) {
+                    int temp = std::stoi(sub);
+                    b.floor = temp;
+                    b.strike_str = std::to_string(temp) + "+";
+                } else if (sub.find("or below") != std::string::npos) {
+                    int temp = std::stoi(sub);
+                    b.cap = temp + 1;
+                    b.strike_str = "<" + std::to_string(temp + 1);
+                } else if (sub.find(" to ") != std::string::npos) {
+                    size_t pos = sub.find(" to ");
+                    int low = std::stoi(sub.substr(0, pos));
+                    int high = std::stoi(sub.substr(pos + 4));
+                    b.floor = low;
+                    b.cap = high + 1;
+                    b.strike_str = std::to_string(low) + "-" + std::to_string(high);
+                }
+                parsed_brackets.push_back(b);
+            }
+
+            // Find the bracket our adjusted forecast falls into
+            const ParsedBracket* target = nullptr;
+            double margin_from_edge = 0;
+
+            for (const auto& b : parsed_brackets) {
                 bool in_bracket = false;
                 double dist_from_floor = 999, dist_from_cap = 999;
 
-                if (market.floor_strike && market.cap_strike) {
-                    // Range bracket: floor <= temp < cap
-                    if (adjusted >= *market.floor_strike && adjusted < *market.cap_strike) {
+                if (b.floor && b.cap) {
+                    if (adjusted >= *b.floor && adjusted < *b.cap) {
                         in_bracket = true;
-                        dist_from_floor = adjusted - *market.floor_strike;
-                        dist_from_cap = *market.cap_strike - adjusted;
+                        dist_from_floor = adjusted - *b.floor;
+                        dist_from_cap = *b.cap - adjusted;
                     }
-                } else if (market.floor_strike && !market.cap_strike) {
-                    // Floor only: temp >= floor (e.g., 70+)
-                    if (adjusted >= *market.floor_strike) {
+                } else if (b.floor && !b.cap) {
+                    if (adjusted >= *b.floor) {
                         in_bracket = true;
-                        dist_from_floor = adjusted - *market.floor_strike;
-                        dist_from_cap = 999;  // No cap
+                        dist_from_floor = adjusted - *b.floor;
+                        dist_from_cap = 999;
                     }
-                } else if (!market.floor_strike && market.cap_strike) {
-                    // Cap only: temp < cap (e.g., <39)
-                    if (adjusted < *market.cap_strike) {
+                } else if (!b.floor && b.cap) {
+                    if (adjusted < *b.cap) {
                         in_bracket = true;
-                        dist_from_floor = 999;  // No floor
-                        dist_from_cap = *market.cap_strike - adjusted;
+                        dist_from_floor = 999;
+                        dist_from_cap = *b.cap - adjusted;
                     }
                 }
 
                 if (in_bracket) {
                     margin_from_edge = std::min(dist_from_floor, dist_from_cap);
-                    target_market = &market;
+                    target = &b;
                     break;
                 }
             }
+
+            const predibloom::api::Market* target_market = target ? target->market : nullptr;
 
             if (!target_market) {
                 skipped++;
@@ -636,15 +687,8 @@ int main(int argc, char** argv) {
             // Calculate P&L (per $1 contract)
             double pnl = won ? (100 - entry_price) : (-entry_price);
 
-            // Format strike for display
-            std::string strike;
-            if (target_market->floor_strike && !target_market->cap_strike) {
-                strike = std::to_string(*target_market->floor_strike) + "+";
-            } else if (!target_market->floor_strike && target_market->cap_strike) {
-                strike = "<" + std::to_string(*target_market->cap_strike);
-            } else if (target_market->floor_strike && target_market->cap_strike) {
-                strike = std::to_string(*target_market->floor_strike) + "-" + std::to_string(*target_market->cap_strike);
-            }
+            // Use parsed strike string
+            std::string strike = target->strike_str;
 
             Trade t{date, target_market->ticker, strike, forecast, adjusted, entry_time, entry_price, nws_actual, won, pnl};
             trades.push_back(t);
