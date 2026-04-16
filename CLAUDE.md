@@ -44,13 +44,21 @@ Location: `~/.config/predibloom/config.json`
 
 ```json
 {
-  "tracked": [
+  "tabs": [
     {
-      "series_ticker": "KXHORMUZNORM",
-      "label": "Strait of Hormuz"
+      "name": "Politics",
+      "series": [
+        {"series_ticker": "KXHORMUZNORM", "label": "Strait of Hormuz"}
+      ]
+    },
+    {
+      "name": "Climate",
+      "series": [
+        {"series_ticker": "KXHIGHNY", "label": "NYC High Temp"}
+      ]
     }
   ]
 }
 ```
 
-The GUI loads this on startup and filters markets by the first tracked series.
+The GUI shows tabs in the toolbar. Each tab contains one or more market series. Clicking a tab fetches markets for all series in that tab.

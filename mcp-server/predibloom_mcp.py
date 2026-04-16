@@ -51,15 +51,25 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="predibloom_click",
-            description="Simulate mouse click at specific coordinates in the GUI",
+            name="predibloom_click_button",
+            description="Click a button by its ID (use list_buttons to see available buttons)",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "x": {"type": "integer", "description": "X coordinate"},
-                    "y": {"type": "integer", "description": "Y coordinate"}
+                    "button_id": {
+                        "type": "string",
+                        "description": "Button ID (e.g., 'tab_Politics', 'tab_Climate', 'refresh')"
+                    }
                 },
-                "required": ["x", "y"]
+                "required": ["button_id"]
+            }
+        ),
+        Tool(
+            name="predibloom_list_buttons",
+            description="List all available buttons with their IDs",
+            inputSchema={
+                "type": "object",
+                "properties": {}
             }
         ),
         Tool(
@@ -113,6 +123,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(
                 type="text",
                 text=json.dumps(state, indent=2)
+            )]
+        elif cmd_name == "list_buttons":
+            buttons = result.get("buttons", [])
+            lines = ["Available buttons:"]
+            for btn in buttons:
+                status = " (selected)" if btn.get("is_selected") else ""
+                btn_type = "tab" if btn.get("is_tab") else "button"
+                lines.append(f"  - {btn['id']}: {btn['label']} [{btn_type}]{status}")
+            return [TextContent(
+                type="text",
+                text="\n".join(lines)
             )]
         else:
             return [TextContent(

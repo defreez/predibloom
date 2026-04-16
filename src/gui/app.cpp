@@ -15,10 +15,46 @@ App::App()
     : client_(std::make_unique<api::KalshiClient>()),
       service_(std::make_unique<core::MarketService>(*client_)),
       config_(core::Config::load()) {
-    if (!config_.tracked.empty()) {
-        current_series_label_ = config_.tracked[0].label;
-    }
+    rebuildWidgets();
     fetchMarkets();
+}
+
+void App::rebuildWidgets() {
+    widgets_.clear();
+
+    int title_width = MeasureText("PREDIBLOOM", 24);
+    int tab_x = title_width + 40;
+
+    // Create tab buttons
+    for (size_t i = 0; i < config_.tabs.size(); i++) {
+        const auto& tab = config_.tabs[i];
+        int text_width = MeasureText(tab.name.c_str(), 18);
+        int tab_width = text_width + 20;
+
+        std::string tab_id = "tab_" + tab.name;
+        Rectangle bounds = {(float)tab_x, 0, (float)tab_width, (float)TOOLBAR_HEIGHT};
+
+        ui::Button btn(tab_id, bounds, tab.name, [this, i]() {
+            if ((int)i != selected_tab_idx_) {
+                selected_tab_idx_ = (int)i;
+                fetchMarkets();
+                rebuildWidgets();
+            }
+        });
+        btn.is_tab = true;
+        btn.is_selected = (i == (size_t)selected_tab_idx_);
+        widgets_.addButton(btn);
+
+        tab_x += tab_width + 10;
+    }
+
+    // Refresh button
+    int w = GetScreenWidth();
+    int left_w = static_cast<int>(w * LEFT_PANEL_RATIO);
+    Rectangle refresh_bounds = {(float)(left_w - 90), (float)(TOOLBAR_HEIGHT + 5), 80.0f, 20.0f};
+    widgets_.addButton(ui::Button("refresh", refresh_bounds, "REFRESH", [this]() {
+        fetchMarkets();
+    }));
 }
 
 void App::initControlSocket() {
@@ -118,10 +154,21 @@ void App::executeCommand(const std::string& cmd_json, std::string& response) {
             TakeScreenshot(path.c_str());
             result["path"] = path;
         }
-        else if (command == "click") {
-            int x = cmd["x"];
-            int y = cmd["y"];
-            pending_clicks_.push(Vector2{(float)x, (float)y});
+        else if (command == "click_button") {
+            std::string button_id = cmd["button_id"];
+            pending_button_clicks_.push(button_id);
+        }
+        else if (command == "list_buttons") {
+            nlohmann::json buttons = nlohmann::json::array();
+            for (const auto& btn : widgets_.buttons()) {
+                buttons.push_back({
+                    {"id", btn.id},
+                    {"label", btn.label},
+                    {"is_tab", btn.is_tab},
+                    {"is_selected", btn.is_selected}
+                });
+            }
+            result["buttons"] = buttons;
         }
         else if (command == "scroll") {
             float delta = cmd["delta"];
@@ -154,9 +201,14 @@ std::string App::getStateJson() const {
     nlohmann::json state;
     state["num_markets"] = markets_.size();
     state["selected_market_idx"] = selected_market_idx_;
+    state["selected_tab_idx"] = selected_tab_idx_;
     state["scroll_offset"] = scroll_offset_;
     state["is_loading"] = is_loading_;
     state["has_error"] = !error_message_.empty();
+
+    if (selected_tab_idx_ >= 0 && selected_tab_idx_ < (int)config_.tabs.size()) {
+        state["selected_tab_name"] = config_.tabs[selected_tab_idx_].name;
+    }
 
     if (selected_market_idx_ >= 0 && selected_market_idx_ < (int)markets_.size()) {
         state["selected_market_ticker"] = markets_[selected_market_idx_].ticker;
@@ -168,26 +220,30 @@ std::string App::getStateJson() const {
 void App::fetchMarkets() {
     is_loading_ = true;
     error_message_.clear();
+    markets_.clear();
 
-    core::MarketFilter filter;
-    filter.status = "open";
-    filter.limit = 50;
-
-    // Use series_ticker from config if available
-    if (!config_.tracked.empty()) {
-        filter.series_ticker = config_.tracked[0].series_ticker;
-    }
-
-    auto result = service_->listMarkets(filter);
-    is_loading_ = false;
-
-    if (!result.ok()) {
-        error_message_ = "Error: " + result.error().message;
-        markets_.clear();
+    if (config_.tabs.empty() || selected_tab_idx_ >= (int)config_.tabs.size()) {
+        is_loading_ = false;
         return;
     }
 
-    markets_ = std::move(result.value());
+    const auto& tab = config_.tabs[selected_tab_idx_];
+
+    // Fetch markets for each series in the tab
+    for (const auto& series : tab.series) {
+        core::MarketFilter filter;
+        filter.status = "open";
+        filter.limit = 50;
+        filter.series_ticker = series.series_ticker;
+
+        auto result = service_->listMarkets(filter);
+        if (result.ok()) {
+            auto& new_markets = result.value();
+            markets_.insert(markets_.end(), new_markets.begin(), new_markets.end());
+        }
+    }
+
+    is_loading_ = false;
     selected_market_idx_ = -1;
     scroll_offset_ = 0.0f;
     selected_orderbook_.reset();
@@ -226,30 +282,11 @@ void App::Update(float dt) {
         scroll_offset_ = std::max(0.0f, std::min(scroll_offset_, max_scroll));
     }
 
-    // Process pending simulated clicks
-    if (!pending_clicks_.empty()) {
-        Vector2 click_pos = pending_clicks_.front();
-        pending_clicks_.pop();
-
-        // Check if click is in left panel
-        if (CheckCollisionPointRec(click_pos, left_panel)) {
-            int list_y = content_y + HEADER_HEIGHT;
-
-            // Check refresh button
-            Rectangle refresh_btn = {(float)(left_w - 90), 5.0f, 80.0f, 20.0f};
-            if (CheckCollisionPointRec(click_pos, refresh_btn)) {
-                fetchMarkets();
-            }
-            // Check market selection
-            else if (click_pos.y >= list_y) {
-                int clicked_idx = static_cast<int>((click_pos.y - list_y + scroll_offset_)
-                                                   / MARKET_ROW_HEIGHT);
-                if (clicked_idx >= 0 && clicked_idx < (int)markets_.size()) {
-                    selected_market_idx_ = clicked_idx;
-                    fetchOrderbook(markets_[clicked_idx].ticker);
-                }
-            }
-        }
+    // Process pending button clicks (from MCP)
+    while (!pending_button_clicks_.empty()) {
+        std::string button_id = pending_button_clicks_.front();
+        pending_button_clicks_.pop();
+        widgets_.clickButton(button_id);
     }
 
     // Handle real scrolling in left panel
@@ -265,26 +302,23 @@ void App::Update(float dt) {
         }
     }
 
-    // Handle real market selection clicks
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-        CheckCollisionPointRec(mouse, left_panel)) {
-
-        int list_y = content_y + HEADER_HEIGHT;
-        if (mouse.y >= list_y) {
-            int clicked_idx = static_cast<int>((mouse.y - list_y + scroll_offset_)
-                                               / MARKET_ROW_HEIGHT);
-            if (clicked_idx >= 0 && clicked_idx < (int)markets_.size()) {
-                selected_market_idx_ = clicked_idx;
-                fetchOrderbook(markets_[clicked_idx].ticker);
+    // Handle real mouse clicks
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        // First check widgets (tabs, refresh button)
+        if (!widgets_.handleClick(mouse)) {
+            // Not a widget click, check market selection
+            if (CheckCollisionPointRec(mouse, left_panel)) {
+                int list_y = content_y + HEADER_HEIGHT;
+                if (mouse.y >= list_y) {
+                    int clicked_idx = static_cast<int>((mouse.y - list_y + scroll_offset_)
+                                                       / MARKET_ROW_HEIGHT);
+                    if (clicked_idx >= 0 && clicked_idx < (int)markets_.size()) {
+                        selected_market_idx_ = clicked_idx;
+                        fetchOrderbook(markets_[clicked_idx].ticker);
+                    }
+                }
             }
         }
-    }
-
-    // Handle refresh button click
-    Rectangle refresh_btn = {(float)(left_w - 90), 5.0f, 80.0f, 20.0f};
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-        CheckCollisionPointRec(mouse, refresh_btn)) {
-        fetchMarkets();
     }
 }
 
@@ -312,12 +346,11 @@ void App::DrawToolbar(int x, int y, int w, int h) const {
     DrawLine(x, y + h - 1, x + w, y + h - 1, t.border);
     DrawText("PREDIBLOOM", x + 10, y + 8, t.font_header, t.accent);
 
-    // Show current series label
-    if (!current_series_label_.empty()) {
-        int title_width = MeasureText("PREDIBLOOM", t.font_header);
-        DrawText("|", x + 20 + title_width, y + 8, t.font_header, t.border);
-        DrawText(current_series_label_.c_str(), x + 35 + title_width, y + 12,
-                 t.font_body, t.text);
+    // Draw tab buttons via widget system
+    for (const auto& btn : widgets_.buttons()) {
+        if (btn.is_tab) {
+            btn.draw();
+        }
     }
 }
 
@@ -331,10 +364,12 @@ void App::DrawLeftPanel(int x, int y, int w, int h) const {
     DrawRectangle(x, y, w, HEADER_HEIGHT, t.bg_panel);
     DrawText("MARKETS", x + 10, y + 5, t.font_small, t.text);
 
-    Rectangle refresh_btn = {(float)(x + w - 90), (float)(y + 5), 80.0f, 20.0f};
-    DrawRectangleRec(refresh_btn, t.accent);
-    DrawText("REFRESH", (int)refresh_btn.x + 5, (int)refresh_btn.y + 2,
-             t.font_small - 2, t.text);
+    // Draw refresh button via widget system
+    for (const auto& btn : widgets_.buttons()) {
+        if (btn.id == "refresh") {
+            btn.draw();
+        }
+    }
 
     // Loading/error states
     if (is_loading_) {

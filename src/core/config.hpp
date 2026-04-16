@@ -10,8 +10,13 @@ struct TrackedSeries {
     std::string label;
 };
 
+struct Tab {
+    std::string name;
+    std::vector<TrackedSeries> series;
+};
+
 struct Config {
-    std::vector<TrackedSeries> tracked;
+    std::vector<Tab> tabs;
 
     static Config load();
     static std::string default_path();

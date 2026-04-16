@@ -9,6 +9,7 @@
 #include "../core/service.hpp"
 #include "../core/config.hpp"
 #include "../api/types.hpp"
+#include "../ui/widgets.hpp"
 #include "raylib.h"
 
 namespace predibloom {
@@ -44,7 +45,9 @@ private:
     std::unique_ptr<api::KalshiClient> client_;
     std::unique_ptr<core::MarketService> service_;
     core::Config config_;
-    std::string current_series_label_;
+
+    // Tab state
+    int selected_tab_idx_ = 0;
 
     // Market list state
     std::vector<api::Market> markets_;
@@ -64,8 +67,12 @@ private:
     std::string command_buffer_;
 
     // Pending simulated inputs
-    std::queue<Vector2> pending_clicks_;
+    std::queue<std::string> pending_button_clicks_;
     std::queue<float> pending_scrolls_;
+
+    // Widget system
+    ui::WidgetManager widgets_;
+    void rebuildWidgets();
 };
 
 } // namespace predibloom
