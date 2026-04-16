@@ -45,8 +45,10 @@ find_package(OpenSSL REQUIRED)
 # Shared core library (API client + service layer)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
+    src/api/openmeteo_client.cpp
     src/core/service.cpp
     src/core/config.cpp
+    src/core/weather_comparison.cpp
 )
 
 target_include_directories(predibloom_core PUBLIC

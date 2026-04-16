@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../api/types.hpp"
+#include "../core/weather_comparison.hpp"
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
@@ -272,6 +273,144 @@ inline void printMarketDetail(const api::Market& m, OutputFormat fmt) {
               << " bid / " << formatPrice(m.no_ask_cents()) << " ask\n";
     std::cout << "Last:       " << formatPrice(m.last_price_cents()) << "\n";
     std::cout << "Volume:     " << m.volume_fp << " (24h: " << m.volume_24h_fp << ")\n";
+}
+
+// Helper to format temperature
+inline std::string formatTemp(std::optional<double> temp) {
+    if (!temp.has_value()) return "-";
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(1) << temp.value() << "F";
+    return ss.str();
+}
+
+// Helper to format strike range
+inline std::string formatStrikeRange(std::optional<int> floor, std::optional<int> cap) {
+    if (floor.has_value() && !cap.has_value()) {
+        // floor+ (floor or higher)
+        return std::to_string(floor.value()) + "+";
+    }
+    if (!floor.has_value() && cap.has_value()) {
+        // cap- (cap or lower)
+        return "<" + std::to_string(cap.value());
+    }
+    if (floor.has_value() && cap.has_value()) {
+        // Between floor and cap
+        return std::to_string(floor.value()) + "-" + std::to_string(cap.value());
+    }
+    return "-";
+}
+
+// Print comparison summary as table
+inline void printComparisonTable(const core::ComparisonSummary& summary) {
+    std::cout << "Weather Comparison: " << summary.series_ticker << "\n";
+    std::cout << std::string(100, '=') << "\n\n";
+
+    std::cout << "Summary:\n";
+    std::cout << "  Total markets:    " << summary.total_markets << "\n";
+    std::cout << "  Settled:          " << summary.settled_markets << "\n";
+    std::cout << "  With forecast:    " << summary.markets_with_forecast << "\n";
+    std::cout << "  With actual:      " << summary.markets_with_actual << "\n";
+
+    if (summary.forecast_mae > 0) {
+        std::cout << std::fixed << std::setprecision(1);
+        std::cout << "  Forecast MAE:     " << summary.forecast_mae << "F\n";
+    }
+    if (summary.market_accuracy > 0) {
+        std::cout << std::fixed << std::setprecision(1);
+        std::cout << "  Market accuracy:  " << summary.market_accuracy << "%\n";
+    }
+
+    std::cout << "\n";
+    std::cout << std::left
+              << std::setw(12) << "DATE"
+              << std::setw(24) << "TICKER"
+              << std::setw(10) << "STRIKE"
+              << std::setw(10) << "PRICE"
+              << std::setw(12) << "FORECAST"
+              << std::setw(12) << "ACTUAL"
+              << std::setw(10) << "SETTLED"
+              << "\n";
+    std::cout << std::string(90, '-') << "\n";
+
+    for (const auto& pt : summary.points) {
+        std::cout << std::left
+                  << std::setw(12) << pt.date
+                  << std::setw(24) << truncate(pt.market_ticker, 23)
+                  << std::setw(10) << formatStrikeRange(pt.floor_strike, pt.cap_strike)
+                  << std::setw(10) << formatPrice(pt.kalshi_price)
+                  << std::setw(12) << formatTemp(pt.forecast_high)
+                  << std::setw(12) << formatTemp(pt.actual_high)
+                  << std::setw(10) << (pt.settlement.empty() ? "-" : pt.settlement)
+                  << "\n";
+    }
+}
+
+// Print comparison as JSON
+inline void printComparisonJson(const core::ComparisonSummary& summary) {
+    nlohmann::json j;
+    j["series_ticker"] = summary.series_ticker;
+    j["total_markets"] = summary.total_markets;
+    j["settled_markets"] = summary.settled_markets;
+    j["markets_with_forecast"] = summary.markets_with_forecast;
+    j["markets_with_actual"] = summary.markets_with_actual;
+    j["forecast_mae"] = summary.forecast_mae;
+    j["market_accuracy"] = summary.market_accuracy;
+
+    j["points"] = nlohmann::json::array();
+    for (const auto& pt : summary.points) {
+        nlohmann::json point;
+        point["date"] = pt.date;
+        point["market_ticker"] = pt.market_ticker;
+        point["kalshi_price"] = pt.kalshi_price;
+
+        if (pt.forecast_high.has_value()) {
+            point["forecast_high"] = pt.forecast_high.value();
+        } else {
+            point["forecast_high"] = nullptr;
+        }
+
+        if (pt.actual_high.has_value()) {
+            point["actual_high"] = pt.actual_high.value();
+        } else {
+            point["actual_high"] = nullptr;
+        }
+
+        point["settlement"] = pt.settlement;
+
+        if (pt.floor_strike.has_value()) {
+            point["floor_strike"] = pt.floor_strike.value();
+        }
+        if (pt.cap_strike.has_value()) {
+            point["cap_strike"] = pt.cap_strike.value();
+        }
+
+        j["points"].push_back(point);
+    }
+
+    std::cout << j.dump(2) << "\n";
+}
+
+// Print comparison as CSV
+inline void printComparisonCsv(const core::ComparisonSummary& summary) {
+    std::cout << "date,ticker,floor_strike,cap_strike,kalshi_price,forecast_high,actual_high,settlement\n";
+    for (const auto& pt : summary.points) {
+        std::cout << pt.date << ","
+                  << pt.market_ticker << ","
+                  << (pt.floor_strike.has_value() ? std::to_string(pt.floor_strike.value()) : "") << ","
+                  << (pt.cap_strike.has_value() ? std::to_string(pt.cap_strike.value()) : "") << ","
+                  << pt.kalshi_price << ","
+                  << (pt.forecast_high.has_value() ? std::to_string(pt.forecast_high.value()) : "") << ","
+                  << (pt.actual_high.has_value() ? std::to_string(pt.actual_high.value()) : "") << ","
+                  << pt.settlement << "\n";
+    }
+}
+
+inline void printComparison(const core::ComparisonSummary& summary, OutputFormat fmt) {
+    switch (fmt) {
+        case OutputFormat::Json: printComparisonJson(summary); break;
+        case OutputFormat::Csv: printComparisonCsv(summary); break;
+        case OutputFormat::Table: printComparisonTable(summary); break;
+    }
 }
 
 } // namespace predibloom::cli

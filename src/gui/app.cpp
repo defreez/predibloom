@@ -13,7 +13,9 @@ namespace predibloom {
 
 App::App()
     : client_(std::make_unique<api::KalshiClient>()),
+      openmeteo_(std::make_unique<api::OpenMeteoClient>()),
       service_(std::make_unique<core::MarketService>(*client_)),
+      comparison_service_(std::make_unique<core::WeatherComparisonService>(*client_, *openmeteo_)),
       config_(core::Config::load()) {
     rebuildWidgets();
     fetchMarkets();
@@ -251,9 +253,19 @@ void App::fetchMarkets() {
 
 void App::fetchOrderbook(const std::string& ticker) {
     selected_orderbook_.reset();
+    selected_comparison_.reset();
+
     auto result = service_->getOrderbook(ticker, 10);
     if (result.ok()) {
         selected_orderbook_ = std::move(result.value());
+    }
+
+    // Fetch weather comparison for KXHIGHNY markets
+    if (ticker.find("KXHIGHNY") == 0 && selected_market_idx_ >= 0) {
+        auto comp_result = comparison_service_->getPoint(markets_[selected_market_idx_]);
+        if (comp_result.ok()) {
+            selected_comparison_ = std::move(comp_result.value());
+        }
     }
 }
 
@@ -467,6 +479,49 @@ void App::DrawRightPanel(int x, int y, int w, int h) const {
              market.no_bid_cents(), market.no_ask_cents());
     DrawText(price_text, x + 20, cursor_y, t.font_small, t.negative);
     cursor_y += 40;
+
+    // Weather comparison (for KXHIGHNY markets)
+    if (selected_comparison_.has_value()) {
+        DrawText("WEATHER DATA", x + 10, cursor_y, t.font_body, t.accent);
+        cursor_y += 30;
+
+        const auto& comp = selected_comparison_.value();
+        char weather_text[128];
+
+        // Forecast
+        if (comp.forecast_high.has_value()) {
+            snprintf(weather_text, sizeof(weather_text), "Forecast (%s): %.1fF",
+                     comp.date.c_str(), comp.forecast_high.value());
+            DrawText(weather_text, x + 20, cursor_y, t.font_small, t.text);
+        } else {
+            snprintf(weather_text, sizeof(weather_text), "Forecast (%s): N/A",
+                     comp.date.c_str());
+            DrawText(weather_text, x + 20, cursor_y, t.font_small, t.text_dim);
+        }
+        cursor_y += 25;
+
+        // Actual
+        if (comp.actual_high.has_value()) {
+            snprintf(weather_text, sizeof(weather_text), "Actual High: %.1fF",
+                     comp.actual_high.value());
+            DrawText(weather_text, x + 20, cursor_y, t.font_small, t.text);
+        } else {
+            DrawText("Actual High: Pending", x + 20, cursor_y, t.font_small, t.text_dim);
+        }
+        cursor_y += 25;
+
+        // Settlement
+        if (!comp.settlement.empty()) {
+            const char* checkmark = (comp.settlement == "yes") ? " Y" : " N";
+            snprintf(weather_text, sizeof(weather_text), "Settlement: %s%s",
+                     comp.settlement.c_str(), checkmark);
+            Color settlement_color = (comp.settlement == "yes") ? t.positive : t.negative;
+            DrawText(weather_text, x + 20, cursor_y, t.font_small, settlement_color);
+        } else {
+            DrawText("Settlement: Pending", x + 20, cursor_y, t.font_small, t.text_dim);
+        }
+        cursor_y += 40;
+    }
 
     // Orderbook
     DrawText("ORDERBOOK", x + 10, cursor_y, t.font_body, t.accent);

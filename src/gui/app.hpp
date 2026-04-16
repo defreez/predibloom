@@ -6,8 +6,10 @@
 #include <string>
 #include <queue>
 #include "../api/kalshi_client.hpp"
+#include "../api/openmeteo_client.hpp"
 #include "../core/service.hpp"
 #include "../core/config.hpp"
+#include "../core/weather_comparison.hpp"
 #include "../api/types.hpp"
 #include "../ui/widgets.hpp"
 #include "raylib.h"
@@ -43,7 +45,9 @@ private:
 
     // Service layer
     std::unique_ptr<api::KalshiClient> client_;
+    std::unique_ptr<api::OpenMeteoClient> openmeteo_;
     std::unique_ptr<core::MarketService> service_;
+    std::unique_ptr<core::WeatherComparisonService> comparison_service_;
     core::Config config_;
 
     // Tab state
@@ -56,6 +60,7 @@ private:
 
     // Detail panel state
     std::optional<api::Orderbook> selected_orderbook_;
+    std::optional<core::ComparisonPoint> selected_comparison_;
 
     // UI state
     bool is_loading_ = false;

@@ -1,6 +1,8 @@
 #include <CLI/CLI.hpp>
 #include "../api/kalshi_client.hpp"
+#include "../api/openmeteo_client.hpp"
 #include "../core/service.hpp"
+#include "../core/weather_comparison.hpp"
 #include "formatters.hpp"
 #include <iostream>
 
@@ -15,6 +17,7 @@ int main(int argc, char** argv) {
     auto* events_cmd = app.add_subcommand("events", "List events");
     auto* orderbook_cmd = app.add_subcommand("orderbook", "Show orderbook for a market");
     auto* market_cmd = app.add_subcommand("market", "Show details for a single market");
+    auto* compare_cmd = app.add_subcommand("compare", "Compare Kalshi prices with weather data");
 
     // Markets command options
     std::string markets_status = "open";
@@ -70,6 +73,22 @@ int main(int argc, char** argv) {
     market_cmd->add_option("-f,--format", market_format, "Output format: table|json")
         ->default_val("table")
         ->check(CLI::IsMember({"table", "json"}));
+
+    // Compare command options
+    std::string compare_series;
+    std::string compare_start;
+    std::string compare_end;
+    std::string compare_format = "table";
+
+    compare_cmd->add_option("-s,--series", compare_series, "Series ticker (e.g., KXHIGHNY)")
+        ->required();
+    compare_cmd->add_option("--start", compare_start, "Start date YYYY-MM-DD")
+        ->required();
+    compare_cmd->add_option("--end", compare_end, "End date YYYY-MM-DD")
+        ->required();
+    compare_cmd->add_option("-f,--format", compare_format, "Output format: table|json|csv")
+        ->default_val("table")
+        ->check(CLI::IsMember({"table", "json", "csv"}));
 
     // Require at least one subcommand
     app.require_subcommand(1);
@@ -142,6 +161,21 @@ int main(int argc, char** argv) {
 
         predibloom::cli::printMarketDetail(result.value(),
             predibloom::cli::parseFormat(market_format));
+    }
+
+    // Handle compare command
+    if (*compare_cmd) {
+        predibloom::api::OpenMeteoClient openmeteo;
+        predibloom::core::WeatherComparisonService comparison(client, openmeteo);
+
+        auto result = comparison.analyze(compare_series, compare_start, compare_end);
+        if (!result.ok()) {
+            std::cerr << "Error: " << result.error().message << "\n";
+            return 1;
+        }
+
+        predibloom::cli::printComparison(result.value(),
+            predibloom::cli::parseFormat(compare_format));
     }
 
     return 0;

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
+#include <optional>
 #include <nlohmann/json.hpp>
 
 namespace predibloom::api {
@@ -34,6 +35,12 @@ struct Market {
     std::string volume_fp;
     std::string volume_24h_fp;
 
+    // Settlement data
+    std::string result;              // "yes" or "no" if settled
+    std::optional<int> floor_strike; // Lower bound (e.g., temperature)
+    std::optional<int> cap_strike;   // Upper bound
+    std::string close_time;          // Settlement/close time ISO8601
+
     double yes_bid_cents() const {
         return std::atof(yes_bid_dollars.c_str()) * 100.0;
     }
@@ -55,10 +62,31 @@ struct Market {
     }
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Market,
-    ticker, event_ticker, market_type, title, subtitle, status,
-    yes_bid_dollars, yes_ask_dollars, no_bid_dollars, no_ask_dollars,
-    last_price_dollars, volume_fp, volume_24h_fp)
+inline void from_json(const nlohmann::json& j, Market& m) {
+    if (j.contains("ticker")) j.at("ticker").get_to(m.ticker);
+    if (j.contains("event_ticker")) j.at("event_ticker").get_to(m.event_ticker);
+    if (j.contains("market_type")) j.at("market_type").get_to(m.market_type);
+    if (j.contains("title")) j.at("title").get_to(m.title);
+    if (j.contains("subtitle")) j.at("subtitle").get_to(m.subtitle);
+    if (j.contains("status")) j.at("status").get_to(m.status);
+    if (j.contains("yes_bid_dollars")) j.at("yes_bid_dollars").get_to(m.yes_bid_dollars);
+    if (j.contains("yes_ask_dollars")) j.at("yes_ask_dollars").get_to(m.yes_ask_dollars);
+    if (j.contains("no_bid_dollars")) j.at("no_bid_dollars").get_to(m.no_bid_dollars);
+    if (j.contains("no_ask_dollars")) j.at("no_ask_dollars").get_to(m.no_ask_dollars);
+    if (j.contains("last_price_dollars")) j.at("last_price_dollars").get_to(m.last_price_dollars);
+    if (j.contains("volume_fp")) j.at("volume_fp").get_to(m.volume_fp);
+    if (j.contains("volume_24h_fp")) j.at("volume_24h_fp").get_to(m.volume_24h_fp);
+    if (j.contains("result")) j.at("result").get_to(m.result);
+    if (j.contains("close_time")) j.at("close_time").get_to(m.close_time);
+
+    // Handle nullable integer fields
+    if (j.contains("floor_strike") && !j.at("floor_strike").is_null()) {
+        m.floor_strike = j.at("floor_strike").get<int>();
+    }
+    if (j.contains("cap_strike") && !j.at("cap_strike").is_null()) {
+        m.cap_strike = j.at("cap_strike").get<int>();
+    }
+}
 
 struct OrderbookLevel {
     std::string price;
