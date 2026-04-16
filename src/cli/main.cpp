@@ -208,6 +208,8 @@ int main(int argc, char** argv) {
         std::cout << "timestamp,ticker,strike,price_cents\n";
 
         // For each market, fetch trades and output hourly prices
+        int processed = 0;
+        int total = markets_result.value().size();
         for (const auto& market : markets_result.value()) {
             // Parse ticker to get date
             auto ticker_info = predibloom::core::parseHighNYTicker(market.ticker);
@@ -245,7 +247,11 @@ int main(int argc, char** argv) {
             for (const auto& [hour, price] : hourly_prices) {
                 std::cout << hour << "," << market.ticker << "," << strike << "," << price << "\n";
             }
+
+            processed++;
+            std::cerr << "\rProcessed " << processed << "/" << total << " markets" << std::flush;
         }
+        std::cerr << "\n";
     }
 
     return 0;
