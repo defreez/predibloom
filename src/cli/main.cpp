@@ -3,6 +3,7 @@
 #include "../api/openmeteo_client.hpp"
 #include "../api/nws_client.hpp"
 #include "../core/service.hpp"
+#include "../core/config.hpp"
 #include "../core/weather_comparison.hpp"
 #include "formatters.hpp"
 #include <iostream>
@@ -10,6 +11,8 @@
 #include <map>
 
 int main(int argc, char** argv) {
+    // Load config
+    auto config = predibloom::core::Config::load();
     CLI::App app{"predibloom - Kalshi market viewer"};
 
     // Global options
@@ -122,45 +125,46 @@ int main(int argc, char** argv) {
         ->required();
 
     // Backtest command options
-    std::string backtest_series;
+    std::vector<std::string> backtest_series;
     std::string backtest_start;
     std::string backtest_end;
-    double backtest_offset = 2.0;      // Calibration offset: NWS typically runs hotter than Open-Meteo
     double backtest_margin = 3.0;      // Only trade if forecast is this far from bracket edge
+    double backtest_min_price = 5.0;   // Only buy if price is at least this (cents)
     double backtest_max_price = 40.0;  // Only buy if price is below this (cents)
-    double backtest_bankroll = 100.0;  // Starting bankroll in dollars
-    int backtest_entry_hour = 12;      // Entry time: hour of day before settlement (0-23, in settlement day's timezone)
+    double backtest_trade_size = 10.0; // Dollars per trade
+    int backtest_entry_hour = 5;       // 5am UTC = 9pm PST previous day
+    int backtest_entry_days = 0;
 
-    backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker (e.g., KXHIGHNY)")
-        ->required();
+    backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (e.g., KXHIGHNY,KXHIGHLAX)")
+        ->required()
+        ->delimiter(',');
     backtest_cmd->add_option("--start", backtest_start, "Start date YYYY-MM-DD")
         ->required();
     backtest_cmd->add_option("--end", backtest_end, "End date YYYY-MM-DD")
         ->required();
-    backtest_cmd->add_option("--offset", backtest_offset, "Calibration offset to add to Open-Meteo forecast (°F)")
-        ->default_val(2.0);
     backtest_cmd->add_option("--margin", backtest_margin, "Min distance from bracket edge to trade (°F)")
         ->default_val(3.0);
+    backtest_cmd->add_option("--min-price", backtest_min_price, "Min price to pay (cents)")
+        ->default_val(5.0);
     backtest_cmd->add_option("--max-price", backtest_max_price, "Max price to pay (cents)")
         ->default_val(40.0);
-    backtest_cmd->add_option("--bankroll", backtest_bankroll, "Starting bankroll ($)")
-        ->default_val(100.0);
-    backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour of day to enter (0-23, on settlement day)")
-        ->default_val(12)
+    backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade")
+        ->default_val(10.0);
+    backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour of day to enter (0-23, UTC)")
+        ->default_val(5)
         ->check(CLI::Range(0, 23));
+    backtest_cmd->add_option("--entry-days", backtest_entry_days, "Days before settlement (not used)")
+        ->default_val(0)
+        ->check(CLI::Range(-7, 0));
 
     // Predict command options
     std::string predict_series;
     std::string predict_date;
-    double predict_offset = 2.0;
     double predict_margin = 2.0;
 
-    predict_cmd->add_option("-s,--series", predict_series, "Series ticker (e.g., KXHIGHNY)")
-        ->required();
+    predict_cmd->add_option("-s,--series", predict_series, "Series ticker (optional, defaults to all configured)");
     predict_cmd->add_option("-d,--date", predict_date, "Date to predict (YYYY-MM-DD)")
         ->required();
-    predict_cmd->add_option("--offset", predict_offset, "Calibration offset (°F)")
-        ->default_val(2.0);
     predict_cmd->add_option("--margin", predict_margin, "Min margin from bracket edge (°F)")
         ->default_val(2.0);
 
@@ -316,6 +320,13 @@ int main(int argc, char** argv) {
 
     // Handle winners command
     if (*winners_cmd) {
+        auto* series_config = config.findSeries(winners_series);
+        if (!series_config || series_config->nws_station.empty()) {
+            std::cerr << "Series not configured or missing weather params: " << winners_series << "\n";
+            std::cerr << "Add to ~/.config/predibloom/config.json\n";
+            return 1;
+        }
+
         predibloom::api::OpenMeteoClient openmeteo;
         predibloom::api::NwsClient nws;
 
@@ -345,12 +356,12 @@ int main(int argc, char** argv) {
 
         // Fetch forecast data from Open-Meteo
         auto forecast_result = openmeteo.getHistoricalForecast(
-            predibloom::core::NYC_LATITUDE, predibloom::core::NYC_LONGITUDE,
+            series_config->latitude, series_config->longitude,
             winners_start, winners_end);
 
         // Fetch Open-Meteo actual (ERA5 reanalysis - for comparison)
         auto openmeteo_actual_result = openmeteo.getHistoricalWeather(
-            predibloom::core::NYC_LATITUDE, predibloom::core::NYC_LONGITUDE,
+            series_config->latitude, series_config->longitude,
             winners_start, winners_end);
 
         // Fetch actual temperatures from NWS CLI (authoritative for Kalshi settlement)
@@ -359,7 +370,7 @@ int main(int argc, char** argv) {
         std::map<std::string, int> nws_highs;  // date -> NWS high temp
 
         for (int year = start_year; year <= end_year; year++) {
-            auto nws_result = nws.getCliData(predibloom::api::stations::NYC_CENTRAL_PARK, year);
+            auto nws_result = nws.getCliData(series_config->nws_station, year);
             if (nws_result.ok()) {
                 for (const auto& obs : nws_result.value()) {
                     if (obs.date >= winners_start && obs.date <= winners_end) {
@@ -444,19 +455,65 @@ int main(int argc, char** argv) {
 
     // Handle backtest command
     if (*backtest_cmd) {
+        // Validate all series first
+        for (const auto& series : backtest_series) {
+            auto* sc = config.findSeries(series);
+            if (!sc || sc->nws_station.empty()) {
+                std::cerr << "Series not configured or missing weather params: " << series << "\n";
+                std::cerr << "Add to ~/.config/predibloom/config.json\n";
+                return 1;
+            }
+        }
+
         predibloom::api::OpenMeteoClient openmeteo;
         predibloom::api::NwsClient nws;
 
         std::cerr << "Backtest parameters:\n";
-        std::cerr << "  Offset: +" << backtest_offset << "°F (added to Open-Meteo forecast)\n";
+        std::cerr << "  Series: ";
+        for (size_t i = 0; i < backtest_series.size(); i++) {
+            if (i > 0) std::cerr << ", ";
+            std::cerr << backtest_series[i];
+        }
+        std::cerr << "\n";
+        std::cerr << "  Offset: per-series from config\n";
         std::cerr << "  Margin: " << backtest_margin << "°F (min distance from bracket edge)\n";
-        std::cerr << "  Max price: " << backtest_max_price << "¢\n";
-        std::cerr << "  Entry hour: " << backtest_entry_hour << ":00 on settlement day\n";
-        std::cerr << "  Bankroll: $" << backtest_bankroll << "\n\n";
+        std::cerr << "  Price range: " << backtest_min_price << "¢ - " << backtest_max_price << "¢\n";
+        if (backtest_entry_days == 0) {
+            std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC on settlement day\n";
+        } else {
+            std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC, " << (-backtest_entry_days) << " day(s) before settlement\n";
+        }
+        std::cerr << "  Exit: hold to settlement\n";
+        std::cerr << "  Trade size: $" << backtest_trade_size << " per trade\n\n";
 
-        // Get all markets for the series
-        predibloom::api::GetMarketsParams params;
-        params.series_ticker = backtest_series;
+        // Backtest results (moved before loop)
+        struct Trade {
+            std::string series;
+            std::string date;
+            std::string ticker;
+            std::string strike;
+            double forecast;
+            double adjusted;
+            std::string entry_time;
+            double entry_price;   // cents per contract
+            int contracts;        // number of contracts
+            int nws_actual;
+            bool won;
+            bool is_bounded;
+            double pnl;           // total P&L in dollars
+        };
+        std::vector<Trade> trades;
+        double total_pnl_dollars = 0;
+        double total_deployed = 0;
+        int wins = 0, losses = 0, skipped = 0;
+
+        // Process each series
+        for (const auto& current_series : backtest_series) {
+            auto* series_config = config.findSeries(current_series);
+
+            // Get all markets for this series
+            predibloom::api::GetMarketsParams params;
+            params.series_ticker = current_series;
 
         auto markets_result = client.getAllMarkets(params);
         if (!markets_result.ok()) {
@@ -496,51 +553,33 @@ int main(int argc, char** argv) {
             markets_by_date[date].push_back(market);
         }
 
-        std::cerr << "Found " << markets_by_date.size() << " trading days\n";
+            std::cerr << current_series << ": " << markets_by_date.size() << " trading days\n";
 
-        // Fetch forecast data
-        auto forecast_result = openmeteo.getHistoricalForecast(
-            predibloom::core::NYC_LATITUDE, predibloom::core::NYC_LONGITUDE,
-            backtest_start, backtest_end);
+            // Fetch forecast data
+            auto forecast_result = openmeteo.getHistoricalForecast(
+                series_config->latitude, series_config->longitude,
+                backtest_start, backtest_end);
 
-        if (!forecast_result.ok()) {
-            std::cerr << "Error fetching forecasts: " << forecast_result.error().message << "\n";
-            return 1;
-        }
+            if (!forecast_result.ok()) {
+                std::cerr << "Error fetching forecasts for " << current_series << ": " << forecast_result.error().message << "\n";
+                continue;
+            }
 
-        // Fetch NWS actual data
-        int start_year = std::stoi(backtest_start.substr(0, 4));
-        int end_year = std::stoi(backtest_end.substr(0, 4));
-        std::map<std::string, int> nws_highs;
+            // Fetch NWS actual data
+            int start_year = std::stoi(backtest_start.substr(0, 4));
+            int end_year = std::stoi(backtest_end.substr(0, 4));
+            std::map<std::string, int> nws_highs;
 
-        for (int year = start_year; year <= end_year; year++) {
-            auto nws_result = nws.getCliData(predibloom::api::stations::NYC_CENTRAL_PARK, year);
-            if (nws_result.ok()) {
-                for (const auto& obs : nws_result.value()) {
-                    if (obs.date >= backtest_start && obs.date <= backtest_end) {
-                        nws_highs[obs.date] = obs.high;
+            for (int year = start_year; year <= end_year; year++) {
+                auto nws_result = nws.getCliData(series_config->nws_station, year);
+                if (nws_result.ok()) {
+                    for (const auto& obs : nws_result.value()) {
+                        if (obs.date >= backtest_start && obs.date <= backtest_end) {
+                            nws_highs[obs.date] = obs.high;
+                        }
                     }
                 }
             }
-        }
-
-        // Backtest results
-        struct Trade {
-            std::string date;
-            std::string ticker;
-            std::string strike;
-            double forecast;       // Raw Open-Meteo forecast
-            double adjusted;       // After offset
-            std::string entry_time;// When we entered (hour)
-            double entry_price;    // Price paid (cents)
-            int nws_actual;        // Settlement temp
-            bool won;
-            double pnl;            // Profit/loss in cents per contract
-        };
-        std::vector<Trade> trades;
-
-        double total_pnl_cents = 0;
-        int wins = 0, losses = 0, skipped = 0;
 
         // Process each day
         for (const auto& [date, day_markets] : markets_by_date) {
@@ -552,7 +591,7 @@ int main(int argc, char** argv) {
             }
 
             double forecast = *forecast_opt;
-            double adjusted = forecast + backtest_offset;
+            double adjusted = forecast + series_config->offset;
 
             // Get NWS actual
             if (nws_highs.find(date) == nws_highs.end()) {
@@ -561,7 +600,7 @@ int main(int argc, char** argv) {
             }
             int nws_actual = nws_highs.at(date);
 
-            // Parse brackets from subtitle (API doesn't always populate floor/cap_strike)
+            // Parse brackets from subtitle or title
             struct ParsedBracket {
                 const predibloom::api::Market* market;
                 std::optional<int> floor;
@@ -573,23 +612,59 @@ int main(int argc, char** argv) {
             for (const auto& market : day_markets) {
                 ParsedBracket b;
                 b.market = &market;
-                std::string sub = market.subtitle;
 
-                if (sub.find("or above") != std::string::npos) {
-                    int temp = std::stoi(sub);
-                    b.floor = temp;
-                    b.strike_str = std::to_string(temp) + "+";
-                } else if (sub.find("or below") != std::string::npos) {
-                    int temp = std::stoi(sub);
-                    b.cap = temp + 1;
-                    b.strike_str = "<" + std::to_string(temp + 1);
-                } else if (sub.find(" to ") != std::string::npos) {
-                    size_t pos = sub.find(" to ");
-                    int low = std::stoi(sub.substr(0, pos));
-                    int high = std::stoi(sub.substr(pos + 4));
-                    b.floor = low;
-                    b.cap = high + 1;
-                    b.strike_str = std::to_string(low) + "-" + std::to_string(high);
+                // Try subtitle first, fall back to title (LA markets have empty subtitles)
+                std::string text = market.subtitle;
+                bool use_title = text.empty();
+                if (use_title) {
+                    text = market.title;
+                }
+
+                if (use_title) {
+                    // Parse from title: "...be >74°...", "...be <67°...", "...be 71-72°..."
+                    size_t be_pos = text.find("be ");
+                    if (be_pos != std::string::npos) {
+                        std::string after_be = text.substr(be_pos + 3);
+                        // Skip leading whitespace (some titles have "be  >" with double space)
+                        size_t start = after_be.find_first_not_of(' ');
+                        if (start != std::string::npos) after_be = after_be.substr(start);
+                        if (!after_be.empty() && after_be[0] == '>') {
+                            int temp = std::stoi(after_be.substr(1));
+                            b.floor = temp;
+                            b.strike_str = std::to_string(temp) + "+";
+                        } else if (!after_be.empty() && after_be[0] == '<') {
+                            int temp = std::stoi(after_be.substr(1));
+                            b.cap = temp;
+                            b.strike_str = "<" + std::to_string(temp);
+                        } else if (!after_be.empty() && std::isdigit(after_be[0])) {
+                            size_t dash = after_be.find('-');
+                            if (dash != std::string::npos) {
+                                int low = std::stoi(after_be.substr(0, dash));
+                                int high = std::stoi(after_be.substr(dash + 1));
+                                b.floor = low;
+                                b.cap = high + 1;
+                                b.strike_str = std::to_string(low) + "-" + std::to_string(high);
+                            }
+                        }
+                    }
+                } else {
+                    // Parse from subtitle
+                    if (text.find("or above") != std::string::npos) {
+                        int temp = std::stoi(text);
+                        b.floor = temp;
+                        b.strike_str = std::to_string(temp) + "+";
+                    } else if (text.find("or below") != std::string::npos) {
+                        int temp = std::stoi(text);
+                        b.cap = temp + 1;
+                        b.strike_str = "<" + std::to_string(temp + 1);
+                    } else if (text.find(" to ") != std::string::npos) {
+                        size_t pos = text.find(" to ");
+                        int low = std::stoi(text.substr(0, pos));
+                        int high = std::stoi(text.substr(pos + 4));
+                        b.floor = low;
+                        b.cap = high + 1;
+                        b.strike_str = std::to_string(low) + "-" + std::to_string(high);
+                    }
                 }
                 parsed_brackets.push_back(b);
             }
@@ -675,73 +750,125 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // Check if price is within our max
+            // Check if price is within our range
             if (entry_price > backtest_max_price) {
                 skipped++;  // Price too high at entry time
                 continue;
             }
+            if (entry_price < backtest_min_price) {
+                skipped++;  // Price too low (outlier)
+                continue;
+            }
 
-            // Determine if we won
+            // Determine if bracket is bounded (has both floor and cap)
+            bool is_bounded = target->floor.has_value() && target->cap.has_value();
+
+            // Determine if we won (for settlement-based P&L)
             bool won = (target_market->result == "yes");
 
-            // Calculate P&L (per $1 contract)
+            // Calculate P&L - hold to settlement
             double pnl = won ? (100 - entry_price) : (-entry_price);
+
+            // Calculate contracts from trade size
+            // $10 at 25¢/contract = 1000¢ / 25¢ = 40 contracts
+            int contracts = static_cast<int>((backtest_trade_size * 100) / entry_price);
+            if (contracts < 1) contracts = 1;
+
+            // Convert P&L from cents/contract to dollars total
+            double pnl_dollars = (pnl * contracts) / 100.0;
 
             // Use parsed strike string
             std::string strike = target->strike_str;
 
-            Trade t{date, target_market->ticker, strike, forecast, adjusted, entry_time, entry_price, nws_actual, won, pnl};
+            Trade t{current_series, date, target_market->ticker, strike, forecast, adjusted, entry_time, entry_price, contracts, nws_actual, won, is_bounded, pnl_dollars};
             trades.push_back(t);
 
-            total_pnl_cents += pnl;
+            total_pnl_dollars += pnl_dollars;
+            total_deployed += backtest_trade_size;
             if (won) wins++; else losses++;
         }
+        } // end series loop
 
         // Output results
         std::cout << "\n=== BACKTEST RESULTS ===\n\n";
+
+        bool show_series = (backtest_series.size() > 1);
+
+        if (show_series) {
+            std::cout << std::left << std::setw(12) << "Series";
+        }
         std::cout << std::left << std::setw(12) << "Date"
                   << std::setw(10) << "Strike"
-                  << std::setw(9) << "Forecast"
-                  << std::setw(9) << "Adjusted"
                   << std::setw(6) << "NWS"
-                  << std::setw(15) << "Entry Time"
-                  << std::setw(7) << "Price"
+                  << std::setw(7) << "Entry"
+                  << std::setw(6) << "Ctrs"
                   << std::setw(7) << "Result"
-                  << std::setw(8) << "P&L"
+                  << std::setw(10) << "P&L"
                   << "\n";
-        std::cout << std::string(88, '-') << "\n";
+
+        int line_width = 63 + (show_series ? 12 : 0);
+        std::cout << std::string(line_width, '-') << "\n";
 
         for (const auto& t : trades) {
+            if (show_series) {
+                std::cout << std::left << std::setw(12) << t.series;
+            }
             std::cout << std::left << std::setw(12) << t.date
                       << std::setw(10) << t.strike
-                      << std::fixed << std::setprecision(1)
-                      << std::setw(9) << t.forecast
-                      << std::setw(9) << t.adjusted
                       << std::setw(6) << t.nws_actual
-                      << std::setw(15) << t.entry_time
-                      << std::setw(7) << t.entry_price
+                      << std::setw(7) << (std::to_string(static_cast<int>(t.entry_price)) + "c")
+                      << std::setw(6) << t.contracts
                       << std::setw(7) << (t.won ? "WIN" : "LOSS")
-                      << std::showpos << std::setw(8) << t.pnl << std::noshowpos
+                      << std::showpos << std::fixed << std::setprecision(2) << "$" << t.pnl << std::noshowpos
                       << "\n";
         }
 
-        std::cout << std::string(88, '-') << "\n";
+        std::cout << std::string(line_width, '-') << "\n";
+
+        int bounded_count = 0, unbounded_count = 0;
+        double bounded_pnl = 0, unbounded_pnl = 0;
+
+        // Per-series stats
+        std::map<std::string, double> series_pnl;
+        std::map<std::string, int> series_trades;
+
+        for (const auto& t : trades) {
+            series_pnl[t.series] += t.pnl;
+            series_trades[t.series]++;
+            if (t.is_bounded) {
+                bounded_count++;
+                bounded_pnl += t.pnl;
+            } else {
+                unbounded_count++;
+                unbounded_pnl += t.pnl;
+            }
+        }
+
         std::cout << "\nSummary:\n";
         std::cout << "  Trades: " << trades.size() << " (" << wins << " wins, " << losses << " losses)\n";
         std::cout << "  Win rate: " << std::fixed << std::setprecision(1)
-                  << (trades.empty() ? 0 : 100.0 * wins / trades.size()) << "%\n";
-        std::cout << "  Skipped: " << skipped << " days (no forecast, bad margin, or no price)\n";
-        std::cout << "  Total P&L: " << std::showpos << total_pnl_cents << std::noshowpos << "¢ per contract\n";
+                  << (100.0 * wins / (wins + losses)) << "%\n";
 
-        // Calculate ROI based on capital deployed
-        double avg_entry = 0;
-        for (const auto& t : trades) avg_entry += t.entry_price;
-        if (!trades.empty()) avg_entry /= trades.size();
+        // Per-series breakdown
+        if (backtest_series.size() > 1) {
+            for (const auto& [series, pnl] : series_pnl) {
+                std::cout << "  " << series << ": " << series_trades[series] << " trades, "
+                          << std::showpos << std::fixed << std::setprecision(2) << "$" << pnl << std::noshowpos << "\n";
+            }
+        }
 
-        double total_deployed = avg_entry * trades.size();  // cents
-        double roi = total_deployed > 0 ? (total_pnl_cents / total_deployed * 100) : 0;
+        if (bounded_count > 0 || unbounded_count > 0) {
+            std::cout << "  Bounded: " << bounded_count << " trades, "
+                      << std::showpos << std::fixed << std::setprecision(2) << "$" << bounded_pnl << std::noshowpos << "\n";
+            std::cout << "  Unbounded: " << unbounded_count << " trades, "
+                      << std::showpos << std::fixed << std::setprecision(2) << "$" << unbounded_pnl << std::noshowpos << "\n";
+        }
 
-        std::cout << "  Avg entry: " << std::fixed << std::setprecision(1) << avg_entry << "¢\n";
+        std::cout << "  Skipped: " << skipped << " days\n";
+        std::cout << "  Deployed: $" << std::fixed << std::setprecision(2) << total_deployed << "\n";
+        std::cout << "  Total P&L: " << std::showpos << "$" << total_pnl_dollars << std::noshowpos << "\n";
+
+        double roi = total_deployed > 0 ? (total_pnl_dollars / total_deployed * 100) : 0;
         std::cout << "  ROI: " << std::showpos << std::setprecision(1) << roi << "%" << std::noshowpos << "\n";
     }
 
@@ -749,41 +876,32 @@ int main(int argc, char** argv) {
     if (*predict_cmd) {
         predibloom::api::OpenMeteoClient openmeteo;
 
-        // Get forecast for the date
-        auto forecast_result = openmeteo.getHistoricalForecast(
-            predibloom::core::NYC_LATITUDE, predibloom::core::NYC_LONGITUDE,
-            predict_date, predict_date);
+        // Build list of series to process
+        std::vector<const predibloom::core::TrackedSeries*> series_list;
+        if (!predict_series.empty()) {
+            auto* sc = config.findSeries(predict_series);
+            if (!sc || sc->latitude == 0) {
+                std::cerr << "Series not configured or missing weather params: " << predict_series << "\n";
+                return 1;
+            }
+            series_list.push_back(sc);
+        } else {
+            // Use all configured series with weather params
+            for (const auto& tab : config.tabs) {
+                for (const auto& sc : tab.series) {
+                    if (sc.latitude != 0 && !sc.nws_station.empty()) {
+                        series_list.push_back(&sc);
+                    }
+                }
+            }
+        }
 
-        if (!forecast_result.ok()) {
-            std::cerr << "Error fetching forecast: " << forecast_result.error().message << "\n";
+        if (series_list.empty()) {
+            std::cerr << "No series configured with weather params\n";
             return 1;
         }
 
-        auto forecast_opt = predibloom::api::getTemperatureForDate(forecast_result.value(), predict_date);
-        if (!forecast_opt) {
-            std::cerr << "No forecast available for " << predict_date << "\n";
-            return 1;
-        }
-
-        double forecast = *forecast_opt;
-        double adjusted = forecast + predict_offset;
-
-        std::cout << "\n=== PREDICTION FOR " << predict_date << " ===\n\n";
-        std::cout << "Open-Meteo forecast: " << std::fixed << std::setprecision(1) << forecast << "°F\n";
-        std::cout << "Adjusted (+offset):  " << adjusted << "°F\n\n";
-
-        // Get all markets for the series on this date
-        predibloom::api::GetMarketsParams params;
-        params.series_ticker = predict_series;
-
-        auto markets_result = client.getAllMarkets(params);
-        if (!markets_result.ok()) {
-            std::cerr << "Error fetching markets: " << markets_result.error().message << "\n";
-            return 1;
-        }
-
-        // Build expected event ticker for the date (KXHIGHNY-YYMMMDD)
-        // Date format: 2026-04-16 -> 26APR16
+        // Date parsing for event ticker matching
         std::string yy = predict_date.substr(2, 2);
         std::string mm = predict_date.substr(5, 2);
         std::string dd = predict_date.substr(8, 2);
@@ -792,160 +910,226 @@ int main(int argc, char** argv) {
             {"05", "MAY"}, {"06", "JUN"}, {"07", "JUL"}, {"08", "AUG"},
             {"09", "SEP"}, {"10", "OCT"}, {"11", "NOV"}, {"12", "DEC"}
         };
-        std::string expected_event = predict_series + "-" + yy + month_map.at(mm) + dd;
 
-        // Find markets for this date by matching event_ticker
-        std::vector<predibloom::api::Market> day_markets;
-        for (const auto& market : markets_result.value()) {
-            if (market.event_ticker == expected_event) {
-                day_markets.push_back(market);
-            }
-        }
-
-        if (day_markets.empty()) {
-            std::cerr << "No markets found for " << predict_date << " (expected event: " << expected_event << ")\n";
-            return 1;
-        }
-
-        // Parse brackets from subtitle field
-        // Formats: "92° or above", "83° or below", "90° to 91°"
-        struct Bracket {
-            const predibloom::api::Market* market;
-            std::optional<int> floor;
-            std::optional<int> cap;
-            std::string strike_str;
+        // Collect predictions for all series
+        struct Prediction {
+            std::string label;
+            std::string series;
+            double forecast;
+            double adjusted;
+            std::string strike;
+            std::string ticker;
+            double margin;
+            double bid;
+            double ask;
+            bool tradeable;
         };
-        std::vector<Bracket> brackets;
+        std::vector<Prediction> predictions;
 
-        for (const auto& market : day_markets) {
-            Bracket b;
-            b.market = &market;
+        std::cerr << "Fetching forecasts for " << series_list.size() << " series...\n";
 
-            // Parse subtitle
-            std::string sub = market.subtitle;
-            if (sub.find("or above") != std::string::npos) {
-                // "92° or above" -> floor only
-                int temp = std::stoi(sub);
-                b.floor = temp;
-                b.strike_str = std::to_string(temp) + "+";
-            } else if (sub.find("or below") != std::string::npos) {
-                // "83° or below" -> cap only (temp is exclusive upper bound)
-                int temp = std::stoi(sub);
-                b.cap = temp + 1;  // "83 or below" means < 84
-                b.strike_str = "<" + std::to_string(temp + 1);
-            } else if (sub.find(" to ") != std::string::npos) {
-                // "90° to 91°" -> range
-                size_t pos = sub.find(" to ");
-                int low = std::stoi(sub.substr(0, pos));
-                int high = std::stoi(sub.substr(pos + 4));
-                b.floor = low;
-                b.cap = high + 1;  // "90 to 91" means >= 90 and < 92
-                b.strike_str = std::to_string(low) + "-" + std::to_string(high);
+        for (const auto* series_config : series_list) {
+            double effective_offset = series_config->offset;
+
+            // Get forecast
+            auto forecast_result = openmeteo.getHistoricalForecast(
+                series_config->latitude, series_config->longitude,
+                predict_date, predict_date);
+
+            if (!forecast_result.ok()) {
+                std::cerr << "  " << series_config->label << ": forecast error\n";
+                continue;
             }
-            brackets.push_back(b);
-        }
 
-        // Find the bracket our adjusted forecast falls into
-        const Bracket* target = nullptr;
-        double margin_from_edge = 0;
-        std::string strike;
+            auto forecast_opt = predibloom::api::getTemperatureForDate(forecast_result.value(), predict_date);
+            if (!forecast_opt) {
+                std::cerr << "  " << series_config->label << ": no forecast data\n";
+                continue;
+            }
 
-        for (const auto& b : brackets) {
-            bool in_bracket = false;
-            double dist_from_floor = 999, dist_from_cap = 999;
+            double forecast = *forecast_opt;
+            double adjusted = forecast + effective_offset;
 
-            if (b.floor && b.cap) {
-                if (adjusted >= *b.floor && adjusted < *b.cap) {
-                    in_bracket = true;
-                    dist_from_floor = adjusted - *b.floor;
-                    dist_from_cap = *b.cap - adjusted;
-                }
-            } else if (b.floor && !b.cap) {
-                if (adjusted >= *b.floor) {
-                    in_bracket = true;
-                    dist_from_floor = adjusted - *b.floor;
-                    dist_from_cap = 999;
-                }
-            } else if (!b.floor && b.cap) {
-                if (adjusted < *b.cap) {
-                    in_bracket = true;
-                    dist_from_floor = 999;
-                    dist_from_cap = *b.cap - adjusted;
+            // Get markets
+            predibloom::api::GetMarketsParams params;
+            params.series_ticker = series_config->series_ticker;
+            auto markets_result = client.getAllMarkets(params);
+            if (!markets_result.ok()) {
+                std::cerr << "  " << series_config->label << ": market error\n";
+                continue;
+            }
+
+            std::string expected_event = series_config->series_ticker + "-" + yy + month_map.at(mm) + dd;
+
+            // Find markets for this date
+            std::vector<predibloom::api::Market> day_markets;
+            for (const auto& market : markets_result.value()) {
+                if (market.event_ticker == expected_event) {
+                    day_markets.push_back(market);
                 }
             }
 
-            if (in_bracket) {
-                margin_from_edge = std::min(dist_from_floor, dist_from_cap);
-                target = &b;
-                strike = b.strike_str;
-                break;
+            if (day_markets.empty()) {
+                std::cerr << "  " << series_config->label << ": no markets for date\n";
+                continue;
             }
-        }
 
-        if (!target) {
-            std::cerr << "Could not find bracket for adjusted forecast " << adjusted << "°F\n";
-            std::cerr << "Available brackets:\n";
+            // Parse brackets
+            struct Bracket {
+                const predibloom::api::Market* market;
+                std::optional<int> floor;
+                std::optional<int> cap;
+                std::string strike_str;
+            };
+            std::vector<Bracket> brackets;
+
+            for (const auto& market : day_markets) {
+                Bracket b;
+                b.market = &market;
+                std::string text = market.subtitle;
+                bool use_title = text.empty();
+                if (use_title) text = market.title;
+
+                if (use_title) {
+                    size_t be_pos = text.find("be ");
+                    if (be_pos != std::string::npos) {
+                        std::string after_be = text.substr(be_pos + 3);
+                        // Skip leading whitespace (some titles have "be  >" with double space)
+                        size_t start = after_be.find_first_not_of(' ');
+                        if (start != std::string::npos) after_be = after_be.substr(start);
+                        if (!after_be.empty() && after_be[0] == '>') {
+                            int temp = std::stoi(after_be.substr(1));
+                            b.floor = temp;
+                            b.strike_str = std::to_string(temp) + "+";
+                        } else if (!after_be.empty() && after_be[0] == '<') {
+                            int temp = std::stoi(after_be.substr(1));
+                            b.cap = temp;
+                            b.strike_str = "<" + std::to_string(temp);
+                        } else if (!after_be.empty() && std::isdigit(after_be[0])) {
+                            size_t dash = after_be.find('-');
+                            if (dash != std::string::npos) {
+                                int low = std::stoi(after_be.substr(0, dash));
+                                int high = std::stoi(after_be.substr(dash + 1));
+                                b.floor = low;
+                                b.cap = high + 1;
+                                b.strike_str = std::to_string(low) + "-" + std::to_string(high);
+                            }
+                        }
+                    }
+                } else {
+                    if (text.find("or above") != std::string::npos) {
+                        int temp = std::stoi(text);
+                        b.floor = temp;
+                        b.strike_str = std::to_string(temp) + "+";
+                    } else if (text.find("or below") != std::string::npos) {
+                        int temp = std::stoi(text);
+                        b.cap = temp + 1;
+                        b.strike_str = "<" + std::to_string(temp + 1);
+                    } else if (text.find(" to ") != std::string::npos) {
+                        size_t pos = text.find(" to ");
+                        int low = std::stoi(text.substr(0, pos));
+                        int high = std::stoi(text.substr(pos + 4));
+                        b.floor = low;
+                        b.cap = high + 1;
+                        b.strike_str = std::to_string(low) + "-" + std::to_string(high);
+                    }
+                }
+                brackets.push_back(b);
+            }
+
+            // Find target bracket
+            const Bracket* target = nullptr;
+            double margin_from_edge = 0;
+
             for (const auto& b : brackets) {
-                std::cerr << "  " << b.strike_str;
-                if (b.floor) std::cerr << " (floor=" << *b.floor << ")";
-                if (b.cap) std::cerr << " (cap=" << *b.cap << ")";
-                std::cerr << "\n";
+                bool in_bracket = false;
+                double dist_from_floor = 999, dist_from_cap = 999;
+
+                if (b.floor && b.cap) {
+                    if (adjusted >= *b.floor && adjusted < *b.cap) {
+                        in_bracket = true;
+                        dist_from_floor = adjusted - *b.floor;
+                        dist_from_cap = *b.cap - adjusted;
+                    }
+                } else if (b.floor && !b.cap) {
+                    if (adjusted >= *b.floor) {
+                        in_bracket = true;
+                        dist_from_floor = adjusted - *b.floor;
+                    }
+                } else if (!b.floor && b.cap) {
+                    if (adjusted < *b.cap) {
+                        in_bracket = true;
+                        dist_from_cap = *b.cap - adjusted;
+                    }
+                }
+
+                if (in_bracket) {
+                    margin_from_edge = std::min(dist_from_floor, dist_from_cap);
+                    target = &b;
+                    break;
+                }
             }
-            return 1;
+
+            if (target) {
+                Prediction p;
+                p.label = series_config->label;
+                p.series = series_config->series_ticker;
+                p.forecast = forecast;
+                p.adjusted = adjusted;
+                p.strike = target->strike_str;
+                p.ticker = target->market->ticker;
+                p.margin = margin_from_edge;
+                p.bid = target->market->yes_bid_cents();
+                p.ask = target->market->yes_ask_cents();
+                p.tradeable = (margin_from_edge >= predict_margin);
+                predictions.push_back(p);
+            }
         }
 
-        const predibloom::api::Market* target_market = target->market;
+        // Output results
+        std::cout << "\n=== PREDICTIONS FOR " << predict_date << " ===\n\n";
 
-        // Show all brackets with prices for context
-        std::cout << "Available brackets:\n";
-        std::cout << std::left << std::setw(12) << "Strike" << std::setw(10) << "Bid" << std::setw(10) << "Ask" << "Match\n";
-        std::cout << std::string(40, '-') << "\n";
+        std::cout << std::left
+                  << std::setw(18) << "City"
+                  << std::setw(10) << "Forecast"
+                  << std::setw(10) << "Adjusted"
+                  << std::setw(10) << "Bracket"
+                  << std::setw(8) << "Margin"
+                  << std::setw(8) << "Bid"
+                  << std::setw(8) << "Ask"
+                  << "Signal\n";
+        std::cout << std::string(78, '-') << "\n";
 
-        for (const auto& b : brackets) {
-            bool is_target = (target && b.market->ticker == target->market->ticker);
+        int tradeable_count = 0;
+        for (const auto& p : predictions) {
+            std::cout << std::left
+                      << std::setw(18) << p.label
+                      << std::setw(10) << (std::to_string((int)std::round(p.forecast)) + "°F")
+                      << std::setw(10) << (std::to_string((int)std::round(p.adjusted)) + "°F")
+                      << std::setw(10) << p.strike
+                      << std::setw(8) << (std::to_string((int)std::round(p.margin)) + "°F")
+                      << std::setw(8) << (std::to_string((int)p.bid) + "¢")
+                      << std::setw(8) << (std::to_string((int)p.ask) + "¢");
 
-            std::cout << std::left << std::setw(12) << b.strike_str
-                      << std::setw(10) << (std::to_string((int)b.market->yes_bid_cents()) + "¢")
-                      << std::setw(10) << (std::to_string((int)b.market->yes_ask_cents()) + "¢")
-                      << (is_target ? "<-- FORECAST" : "")
-                      << "\n";
+            if (p.tradeable) {
+                std::cout << "BUY";
+                tradeable_count++;
+            } else {
+                std::cout << "-";
+            }
+            std::cout << "\n";
         }
 
-        std::cout << "\n";
-        std::cout << "Target bracket: " << strike << "\n";
-        std::cout << "Ticker: " << target_market->ticker << "\n\n";
+        std::cout << std::string(78, '-') << "\n";
+        std::cout << "Tradeable signals: " << tradeable_count << "/" << predictions.size()
+                  << " (margin >= " << predict_margin << "°F)\n";
 
-        // Show the math
-        std::cout << "Analysis:\n";
-        std::cout << "  Raw forecast:     " << std::fixed << std::setprecision(1) << forecast << "°F (Open-Meteo)\n";
-        std::cout << "  + Offset:         +" << predict_offset << "°F (NWS calibration)\n";
-        std::cout << "  = Adjusted:       " << adjusted << "°F\n";
-        std::cout << "  Target bracket:   " << strike << "\n";
-        std::cout << "  Margin from edge: " << margin_from_edge << "°F\n";
-        std::cout << "  Required margin:  " << predict_margin << "°F\n\n";
-
-        // Get current price
-        double bid_price = target_market->yes_bid_cents();
-        double ask_price = target_market->yes_ask_cents();
-
-        if (margin_from_edge < predict_margin) {
-            std::cout << "=== SIGNAL: NO TRADE ===\n\n";
-            std::cout << "Reason: Forecast is only " << margin_from_edge
-                      << "°F from bracket edge.\n";
-            std::cout << "Required margin is " << predict_margin << "°F.\n";
-            std::cout << "Too risky - small forecast error could flip the outcome.\n";
-        } else {
-            std::cout << "=== SIGNAL: BUY " << strike << " ===\n\n";
-            std::cout << "Ticker: " << target_market->ticker << "\n";
-            std::cout << "Current bid/ask: " << bid_price << "¢ / " << ask_price << "¢\n";
-            std::cout << "Confidence: " << margin_from_edge << "°F buffer from edge\n\n";
-
-            if (ask_price > 0 && ask_price < 100) {
-                double potential_profit = 100 - ask_price;
-                double potential_roi = (potential_profit / ask_price) * 100;
-                std::cout << "If bought at ask (" << ask_price << "¢):\n";
-                std::cout << "  Win: +" << std::setprecision(0) << potential_profit << "¢ (+" << std::setprecision(1) << potential_roi << "%)\n";
-                std::cout << "  Lose: -" << std::setprecision(0) << ask_price << "¢\n";
+        if (tradeable_count > 0) {
+            std::cout << "\nTickers to buy:\n";
+            for (const auto& p : predictions) {
+                if (p.tradeable) {
+                    std::cout << "  " << p.ticker << " (" << p.label << " " << p.strike << " @ " << (int)p.ask << "¢)\n";
+                }
             }
         }
     }

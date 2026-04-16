@@ -15,6 +15,10 @@ namespace predibloom::core {
 constexpr double NYC_LATITUDE = 40.7128;
 constexpr double NYC_LONGITUDE = -74.0060;
 
+// LA Airport (LAX) coordinates
+constexpr double LA_LATITUDE = 33.9425;
+constexpr double LA_LONGITUDE = -118.4081;
+
 struct ComparisonPoint {
     std::string date;
     std::string market_ticker;

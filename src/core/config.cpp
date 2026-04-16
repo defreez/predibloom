@@ -31,6 +31,18 @@ Config Config::load() {
                         TrackedSeries ts;
                         ts.series_ticker = series_json["series_ticker"];
                         ts.label = series_json["label"];
+                        if (series_json.contains("latitude")) {
+                            ts.latitude = series_json["latitude"];
+                        }
+                        if (series_json.contains("longitude")) {
+                            ts.longitude = series_json["longitude"];
+                        }
+                        if (series_json.contains("nws_station")) {
+                            ts.nws_station = series_json["nws_station"];
+                        }
+                        if (series_json.contains("offset")) {
+                            ts.offset = series_json["offset"];
+                        }
                         tab.series.push_back(ts);
                     }
                     config.tabs.push_back(tab);
@@ -41,6 +53,17 @@ Config Config::load() {
         }
     }
     return config;
+}
+
+const TrackedSeries* Config::findSeries(const std::string& series_ticker) const {
+    for (const auto& tab : tabs) {
+        for (const auto& series : tab.series) {
+            if (series.series_ticker == series_ticker) {
+                return &series;
+            }
+        }
+    }
+    return nullptr;
 }
 
 } // namespace predibloom::core

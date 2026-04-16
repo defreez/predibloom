@@ -56,6 +56,7 @@ private:
 // Station identifiers for common markets
 namespace stations {
     constexpr const char* NYC_CENTRAL_PARK = "KNYC";
+    constexpr const char* LA_AIRPORT = "KLAX";
     // Add more as needed
 }
 
