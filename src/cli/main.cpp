@@ -37,21 +37,24 @@ struct Bracket {
     }
 
     // Check if temperature falls in this bracket
+    // Uses bracket boundaries (cap is exclusive internally, so boundary is cap-1)
     bool contains(double temp) const {
         if (floor && cap) {
-            return temp >= *floor && temp < *cap;
+            return temp >= *floor && temp <= (*cap - 1);
         } else if (floor && !cap) {
             return temp >= *floor;
         } else if (!floor && cap) {
-            return temp < *cap;
+            return temp <= (*cap - 1);
         }
         return false;
     }
 
     // Distance from nearest edge (for margin calculation)
+    // Positive = inside bracket, negative = outside bracket
+    // Cap is exclusive internally, so boundary is (cap - 1)
     double marginFrom(double temp) const {
         double dist_from_floor = floor ? (temp - *floor) : 999.0;
-        double dist_from_cap = cap ? (*cap - temp) : 999.0;
+        double dist_from_cap = cap ? ((*cap - 1) - temp) : 999.0;
         return std::min(dist_from_floor, dist_from_cap);
     }
 };
@@ -236,7 +239,7 @@ int main(int argc, char** argv) {
     double backtest_margin = 3.0;      // Only trade if forecast is this far from bracket edge
     double backtest_min_price = 5.0;   // Only buy if price is at least this (cents)
     double backtest_max_price = 40.0;  // Only buy if price is below this (cents)
-    double backtest_trade_size = 10.0; // Dollars per trade
+    double backtest_trade_size = 10.0; // Dollars per trade (0 = use 10x margin)
     int backtest_entry_hour = 5;       // 5am UTC = 9pm PST previous day
 
     backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (e.g., KXHIGHNY,KXHIGHLAX)")
@@ -252,7 +255,7 @@ int main(int argc, char** argv) {
         ->default_val(5.0);
     backtest_cmd->add_option("--max-price", backtest_max_price, "Max price to pay (cents)")
         ->default_val(40.0);
-    backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade")
+    backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade (0 = $10 per °F margin)")
         ->default_val(10.0);
     backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour UTC on settlement day (5 = 9pm PST night before)")
         ->default_val(5)
@@ -579,9 +582,17 @@ int main(int argc, char** argv) {
         std::cerr << "  Offset: per-series from config\n";
         std::cerr << "  Margin: " << backtest_margin << "°F (min distance from bracket edge)\n";
         std::cerr << "  Price range: " << backtest_min_price << "¢ - " << backtest_max_price << "¢\n";
-        std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC on settlement day (= 9pm PST night before)\n";
+        int pt_hour = (backtest_entry_hour - 7 + 24) % 24;  // UTC to PT (PDT)
+        std::string pt_ampm = (pt_hour >= 12) ? "pm" : "am";
+        int pt_hour_12 = (pt_hour % 12 == 0) ? 12 : (pt_hour % 12);
+        std::string day_note = (backtest_entry_hour < 7) ? " (previous day)" : "";
+        std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC = " << pt_hour_12 << pt_ampm << " PT" << day_note << "\n";
         std::cerr << "  Exit: hold to settlement\n";
-        std::cerr << "  Trade size: $" << backtest_trade_size << " per trade\n\n";
+        if (backtest_trade_size > 0) {
+            std::cerr << "  Trade size: $" << backtest_trade_size << " per trade\n\n";
+        } else {
+            std::cerr << "  Trade size: $10 per °F margin\n\n";
+        }
 
         // Backtest results (moved before loop)
         struct Trade {
@@ -779,9 +790,12 @@ int main(int argc, char** argv) {
             // Calculate P&L - hold to settlement
             double pnl = won ? (100 - entry_price) : (-entry_price);
 
+            // Calculate trade size: fixed or 10x margin
+            double trade_size = (backtest_trade_size > 0) ? backtest_trade_size : (10.0 * margin_from_edge);
+
             // Calculate contracts from trade size
             // $10 at 25¢/contract = 1000¢ / 25¢ = 40 contracts
-            int contracts = static_cast<int>((backtest_trade_size * 100) / entry_price);
+            int contracts = static_cast<int>((trade_size * 100) / entry_price);
             if (contracts < 1) contracts = 1;
 
             // Convert P&L from cents/contract to dollars total
@@ -794,7 +808,7 @@ int main(int argc, char** argv) {
             trades.push_back(t);
 
             total_pnl_dollars += pnl_dollars;
-            total_deployed += backtest_trade_size;
+            total_deployed += trade_size;
             if (won) wins++; else losses++;
         }
         } // end series loop
@@ -933,6 +947,7 @@ int main(int argc, char** argv) {
             double bid;
             double ask;
             bool tradeable;
+            bool between_brackets;  // forecast doesn't fall into any bracket
         };
         std::vector<Prediction> predictions;
 
@@ -1001,20 +1016,28 @@ int main(int argc, char** argv) {
                 }
             }
 
+            Prediction p;
+            p.label = series_config->label;
+            p.series = series_config->series_ticker;
+            p.forecast = forecast;
+            p.adjusted = adjusted;
+            p.between_brackets = (target == nullptr);
             if (target) {
-                Prediction p;
-                p.label = series_config->label;
-                p.series = series_config->series_ticker;
-                p.forecast = forecast;
-                p.adjusted = adjusted;
                 p.strike = target->displayString();
                 p.ticker = target->market->ticker;
                 p.margin = margin_from_edge;
                 p.bid = target->market->yes_bid_cents();
                 p.ask = target->market->yes_ask_cents();
                 p.tradeable = (margin_from_edge >= predict_margin);
-                predictions.push_back(p);
+            } else {
+                p.strike = "---";
+                p.ticker = "";
+                p.margin = 0;
+                p.bid = 0;
+                p.ask = 0;
+                p.tradeable = false;
             }
+            predictions.push_back(p);
         }
 
         // Output results
@@ -1033,20 +1056,32 @@ int main(int argc, char** argv) {
 
         int tradeable_count = 0;
         for (const auto& p : predictions) {
+            char forecast_buf[16], adjusted_buf[16], margin_buf[16];
+            snprintf(forecast_buf, sizeof(forecast_buf), "%.1f°F", p.forecast);
+            snprintf(adjusted_buf, sizeof(adjusted_buf), "%.1f°F", p.adjusted);
+
             std::cout << std::left
                       << std::setw(18) << p.label
-                      << std::setw(10) << (std::to_string((int)std::round(p.forecast)) + "°F")
-                      << std::setw(10) << (std::to_string((int)std::round(p.adjusted)) + "°F")
-                      << std::setw(10) << p.strike
-                      << std::setw(8) << (std::to_string((int)std::round(p.margin)) + "°F")
-                      << std::setw(8) << (std::to_string((int)p.bid) + "¢")
-                      << std::setw(8) << (std::to_string((int)p.ask) + "¢");
+                      << std::setw(10) << forecast_buf
+                      << std::setw(10) << adjusted_buf
+                      << std::setw(10) << p.strike;
 
-            if (p.tradeable) {
-                std::cout << "BUY";
-                tradeable_count++;
+            if (p.between_brackets) {
+                std::cout << std::setw(8) << "---"
+                          << std::setw(8) << "---"
+                          << std::setw(8) << "---"
+                          << "BETWEEN";
             } else {
-                std::cout << "-";
+                snprintf(margin_buf, sizeof(margin_buf), "%.1f°F", p.margin);
+                std::cout << std::setw(8) << margin_buf
+                          << std::setw(8) << (std::to_string((int)p.bid) + "¢")
+                          << std::setw(8) << (std::to_string((int)p.ask) + "¢");
+                if (p.tradeable) {
+                    std::cout << "BUY";
+                    tradeable_count++;
+                } else {
+                    std::cout << "-";
+                }
             }
             std::cout << "\n";
         }
