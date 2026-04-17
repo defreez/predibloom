@@ -238,7 +238,6 @@ int main(int argc, char** argv) {
     double backtest_max_price = 40.0;  // Only buy if price is below this (cents)
     double backtest_trade_size = 10.0; // Dollars per trade
     int backtest_entry_hour = 5;       // 5am UTC = 9pm PST previous day
-    int backtest_entry_days = 0;
 
     backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (e.g., KXHIGHNY,KXHIGHLAX)")
         ->required()
@@ -255,12 +254,9 @@ int main(int argc, char** argv) {
         ->default_val(40.0);
     backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade")
         ->default_val(10.0);
-    backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour of day to enter (0-23, UTC)")
+    backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour UTC on settlement day (5 = 9pm PST night before)")
         ->default_val(5)
         ->check(CLI::Range(0, 23));
-    backtest_cmd->add_option("--entry-days", backtest_entry_days, "Days before settlement (not used)")
-        ->default_val(0)
-        ->check(CLI::Range(-7, 0));
 
     // Predict command options
     std::string predict_series;
@@ -583,11 +579,7 @@ int main(int argc, char** argv) {
         std::cerr << "  Offset: per-series from config\n";
         std::cerr << "  Margin: " << backtest_margin << "°F (min distance from bracket edge)\n";
         std::cerr << "  Price range: " << backtest_min_price << "¢ - " << backtest_max_price << "¢\n";
-        if (backtest_entry_days == 0) {
-            std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC on settlement day\n";
-        } else {
-            std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC, " << (-backtest_entry_days) << " day(s) before settlement\n";
-        }
+        std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC on settlement day (= 9pm PST night before)\n";
         std::cerr << "  Exit: hold to settlement\n";
         std::cerr << "  Trade size: $" << backtest_trade_size << " per trade\n\n";
 
