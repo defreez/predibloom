@@ -10,6 +10,111 @@
 #include <iomanip>
 #include <map>
 
+namespace {
+
+// Bracket bounds: floor is inclusive, cap is exclusive
+// e.g., "58 or above" -> floor=58, cap=nullopt (wins if actual >= 58)
+// e.g., "77 or below" -> floor=nullopt, cap=78 (wins if actual < 78, i.e., <= 77)
+// e.g., "70 to 71" -> floor=70, cap=72 (wins if actual >= 70 && actual < 72)
+struct Bracket {
+    const predibloom::api::Market* market = nullptr;
+    std::optional<int> floor;  // inclusive lower bound
+    std::optional<int> cap;    // exclusive upper bound
+
+    // Generate display string from floor/cap - single source of truth
+    std::string displayString() const {
+        if (floor && cap) {
+            // Range like "70-71" (cap is exclusive, so display cap-1)
+            return std::to_string(*floor) + "-" + std::to_string(*cap - 1);
+        } else if (floor && !cap) {
+            // "58+" means 58 or above
+            return std::to_string(*floor) + "+";
+        } else if (!floor && cap) {
+            // "77-" means 77 or below (cap is exclusive, so display cap-1)
+            return std::to_string(*cap - 1) + "-";
+        }
+        return "?";
+    }
+
+    // Check if temperature falls in this bracket
+    bool contains(double temp) const {
+        if (floor && cap) {
+            return temp >= *floor && temp < *cap;
+        } else if (floor && !cap) {
+            return temp >= *floor;
+        } else if (!floor && cap) {
+            return temp < *cap;
+        }
+        return false;
+    }
+
+    // Distance from nearest edge (for margin calculation)
+    double marginFrom(double temp) const {
+        double dist_from_floor = floor ? (temp - *floor) : 999.0;
+        double dist_from_cap = cap ? (*cap - temp) : 999.0;
+        return std::min(dist_from_floor, dist_from_cap);
+    }
+};
+
+// Parse bracket from market text (subtitle or title)
+Bracket parseBracket(const predibloom::api::Market& market) {
+    Bracket b;
+    b.market = &market;
+
+    std::string text = market.subtitle;
+    bool use_title = text.empty();
+    if (use_title) {
+        text = market.title;
+    }
+
+    if (use_title) {
+        // Parse from title: "...be >57°...", "...be <78°...", "...be 71-72°..."
+        size_t be_pos = text.find("be ");
+        if (be_pos != std::string::npos) {
+            std::string after_be = text.substr(be_pos + 3);
+            size_t start = after_be.find_first_not_of(' ');
+            if (start != std::string::npos) after_be = after_be.substr(start);
+
+            if (!after_be.empty() && after_be[0] == '>') {
+                // ">57" means strictly greater than 57, i.e., >= 58
+                int temp = std::stoi(after_be.substr(1));
+                b.floor = temp + 1;
+            } else if (!after_be.empty() && after_be[0] == '<') {
+                // "<78" means strictly less than 78, i.e., <= 77
+                int temp = std::stoi(after_be.substr(1));
+                b.cap = temp;
+            } else if (!after_be.empty() && std::isdigit(after_be[0])) {
+                size_t dash = after_be.find('-');
+                if (dash != std::string::npos) {
+                    int low = std::stoi(after_be.substr(0, dash));
+                    int high = std::stoi(after_be.substr(dash + 1));
+                    b.floor = low;
+                    b.cap = high + 1;  // exclusive
+                }
+            }
+        }
+    } else {
+        // Parse from subtitle: "58 or above", "77 or below", "70 to 71"
+        if (text.find("or above") != std::string::npos) {
+            int temp = std::stoi(text);
+            b.floor = temp;
+        } else if (text.find("or below") != std::string::npos) {
+            int temp = std::stoi(text);
+            b.cap = temp + 1;  // "77 or below" -> cap=78 (exclusive)
+        } else if (text.find(" to ") != std::string::npos) {
+            size_t pos = text.find(" to ");
+            int low = std::stoi(text.substr(0, pos));
+            int high = std::stoi(text.substr(pos + 4));
+            b.floor = low;
+            b.cap = high + 1;  // exclusive
+        }
+    }
+
+    return b;
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
     // Load config
     auto config = predibloom::core::Config::load();
@@ -600,105 +705,18 @@ int main(int argc, char** argv) {
             }
             int nws_actual = nws_highs.at(date);
 
-            // Parse brackets from subtitle or title
-            struct ParsedBracket {
-                const predibloom::api::Market* market;
-                std::optional<int> floor;
-                std::optional<int> cap;
-                std::string strike_str;
-            };
-            std::vector<ParsedBracket> parsed_brackets;
-
+            // Parse brackets and find target
+            std::vector<Bracket> brackets;
             for (const auto& market : day_markets) {
-                ParsedBracket b;
-                b.market = &market;
-
-                // Try subtitle first, fall back to title (LA markets have empty subtitles)
-                std::string text = market.subtitle;
-                bool use_title = text.empty();
-                if (use_title) {
-                    text = market.title;
-                }
-
-                if (use_title) {
-                    // Parse from title: "...be >74°...", "...be <67°...", "...be 71-72°..."
-                    size_t be_pos = text.find("be ");
-                    if (be_pos != std::string::npos) {
-                        std::string after_be = text.substr(be_pos + 3);
-                        // Skip leading whitespace (some titles have "be  >" with double space)
-                        size_t start = after_be.find_first_not_of(' ');
-                        if (start != std::string::npos) after_be = after_be.substr(start);
-                        if (!after_be.empty() && after_be[0] == '>') {
-                            int temp = std::stoi(after_be.substr(1));
-                            b.floor = temp;
-                            b.strike_str = std::to_string(temp) + "+";
-                        } else if (!after_be.empty() && after_be[0] == '<') {
-                            int temp = std::stoi(after_be.substr(1));
-                            b.cap = temp;
-                            b.strike_str = "<" + std::to_string(temp);
-                        } else if (!after_be.empty() && std::isdigit(after_be[0])) {
-                            size_t dash = after_be.find('-');
-                            if (dash != std::string::npos) {
-                                int low = std::stoi(after_be.substr(0, dash));
-                                int high = std::stoi(after_be.substr(dash + 1));
-                                b.floor = low;
-                                b.cap = high + 1;
-                                b.strike_str = std::to_string(low) + "-" + std::to_string(high);
-                            }
-                        }
-                    }
-                } else {
-                    // Parse from subtitle
-                    if (text.find("or above") != std::string::npos) {
-                        int temp = std::stoi(text);
-                        b.floor = temp;
-                        b.strike_str = std::to_string(temp) + "+";
-                    } else if (text.find("or below") != std::string::npos) {
-                        int temp = std::stoi(text);
-                        b.cap = temp + 1;
-                        b.strike_str = "<" + std::to_string(temp + 1);
-                    } else if (text.find(" to ") != std::string::npos) {
-                        size_t pos = text.find(" to ");
-                        int low = std::stoi(text.substr(0, pos));
-                        int high = std::stoi(text.substr(pos + 4));
-                        b.floor = low;
-                        b.cap = high + 1;
-                        b.strike_str = std::to_string(low) + "-" + std::to_string(high);
-                    }
-                }
-                parsed_brackets.push_back(b);
+                brackets.push_back(parseBracket(market));
             }
 
             // Find the bracket our adjusted forecast falls into
-            const ParsedBracket* target = nullptr;
+            const Bracket* target = nullptr;
             double margin_from_edge = 0;
-
-            for (const auto& b : parsed_brackets) {
-                bool in_bracket = false;
-                double dist_from_floor = 999, dist_from_cap = 999;
-
-                if (b.floor && b.cap) {
-                    if (adjusted >= *b.floor && adjusted < *b.cap) {
-                        in_bracket = true;
-                        dist_from_floor = adjusted - *b.floor;
-                        dist_from_cap = *b.cap - adjusted;
-                    }
-                } else if (b.floor && !b.cap) {
-                    if (adjusted >= *b.floor) {
-                        in_bracket = true;
-                        dist_from_floor = adjusted - *b.floor;
-                        dist_from_cap = 999;
-                    }
-                } else if (!b.floor && b.cap) {
-                    if (adjusted < *b.cap) {
-                        in_bracket = true;
-                        dist_from_floor = 999;
-                        dist_from_cap = *b.cap - adjusted;
-                    }
-                }
-
-                if (in_bracket) {
-                    margin_from_edge = std::min(dist_from_floor, dist_from_cap);
+            for (const auto& b : brackets) {
+                if (b.contains(adjusted)) {
+                    margin_from_edge = b.marginFrom(adjusted);
                     target = &b;
                     break;
                 }
@@ -778,7 +796,7 @@ int main(int argc, char** argv) {
             double pnl_dollars = (pnl * contracts) / 100.0;
 
             // Use parsed strike string
-            std::string strike = target->strike_str;
+            std::string strike = target->displayString();
 
             Trade t{current_series, date, target_market->ticker, strike, forecast, adjusted, entry_time, entry_price, contracts, nws_actual, won, is_bounded, pnl_dollars};
             trades.push_back(t);
@@ -974,97 +992,18 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // Parse brackets
-            struct Bracket {
-                const predibloom::api::Market* market;
-                std::optional<int> floor;
-                std::optional<int> cap;
-                std::string strike_str;
-            };
+            // Parse brackets and find target
             std::vector<Bracket> brackets;
-
             for (const auto& market : day_markets) {
-                Bracket b;
-                b.market = &market;
-                std::string text = market.subtitle;
-                bool use_title = text.empty();
-                if (use_title) text = market.title;
-
-                if (use_title) {
-                    size_t be_pos = text.find("be ");
-                    if (be_pos != std::string::npos) {
-                        std::string after_be = text.substr(be_pos + 3);
-                        // Skip leading whitespace (some titles have "be  >" with double space)
-                        size_t start = after_be.find_first_not_of(' ');
-                        if (start != std::string::npos) after_be = after_be.substr(start);
-                        if (!after_be.empty() && after_be[0] == '>') {
-                            int temp = std::stoi(after_be.substr(1));
-                            b.floor = temp;
-                            b.strike_str = std::to_string(temp) + "+";
-                        } else if (!after_be.empty() && after_be[0] == '<') {
-                            int temp = std::stoi(after_be.substr(1));
-                            b.cap = temp;
-                            b.strike_str = "<" + std::to_string(temp);
-                        } else if (!after_be.empty() && std::isdigit(after_be[0])) {
-                            size_t dash = after_be.find('-');
-                            if (dash != std::string::npos) {
-                                int low = std::stoi(after_be.substr(0, dash));
-                                int high = std::stoi(after_be.substr(dash + 1));
-                                b.floor = low;
-                                b.cap = high + 1;
-                                b.strike_str = std::to_string(low) + "-" + std::to_string(high);
-                            }
-                        }
-                    }
-                } else {
-                    if (text.find("or above") != std::string::npos) {
-                        int temp = std::stoi(text);
-                        b.floor = temp;
-                        b.strike_str = std::to_string(temp) + "+";
-                    } else if (text.find("or below") != std::string::npos) {
-                        int temp = std::stoi(text);
-                        b.cap = temp + 1;
-                        b.strike_str = "<" + std::to_string(temp + 1);
-                    } else if (text.find(" to ") != std::string::npos) {
-                        size_t pos = text.find(" to ");
-                        int low = std::stoi(text.substr(0, pos));
-                        int high = std::stoi(text.substr(pos + 4));
-                        b.floor = low;
-                        b.cap = high + 1;
-                        b.strike_str = std::to_string(low) + "-" + std::to_string(high);
-                    }
-                }
-                brackets.push_back(b);
+                brackets.push_back(parseBracket(market));
             }
 
-            // Find target bracket
+            // Find the bracket our adjusted forecast falls into
             const Bracket* target = nullptr;
             double margin_from_edge = 0;
-
             for (const auto& b : brackets) {
-                bool in_bracket = false;
-                double dist_from_floor = 999, dist_from_cap = 999;
-
-                if (b.floor && b.cap) {
-                    if (adjusted >= *b.floor && adjusted < *b.cap) {
-                        in_bracket = true;
-                        dist_from_floor = adjusted - *b.floor;
-                        dist_from_cap = *b.cap - adjusted;
-                    }
-                } else if (b.floor && !b.cap) {
-                    if (adjusted >= *b.floor) {
-                        in_bracket = true;
-                        dist_from_floor = adjusted - *b.floor;
-                    }
-                } else if (!b.floor && b.cap) {
-                    if (adjusted < *b.cap) {
-                        in_bracket = true;
-                        dist_from_cap = *b.cap - adjusted;
-                    }
-                }
-
-                if (in_bracket) {
-                    margin_from_edge = std::min(dist_from_floor, dist_from_cap);
+                if (b.contains(adjusted)) {
+                    margin_from_edge = b.marginFrom(adjusted);
                     target = &b;
                     break;
                 }
@@ -1076,7 +1015,7 @@ int main(int argc, char** argv) {
                 p.series = series_config->series_ticker;
                 p.forecast = forecast;
                 p.adjusted = adjusted;
-                p.strike = target->strike_str;
+                p.strike = target->displayString();
                 p.ticker = target->market->ticker;
                 p.margin = margin_from_edge;
                 p.bid = target->market->yes_bid_cents();
