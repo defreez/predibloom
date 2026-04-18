@@ -49,12 +49,15 @@ public:
     Result<TradesResponse> getTrades(const GetTradesParams& params);
     Result<std::vector<Trade>> getAllTrades(const std::string& ticker);
 
+    void setCaching(bool enabled) { caching_ = enabled; }
+
 private:
     std::string buildQueryString(const GetEventsParams& params);
     std::string buildQueryString(const GetMarketsParams& params);
 
     std::unique_ptr<httplib::SSLClient> client_;
     RateLimiter rate_limiter_;
+    bool caching_ = false;
 };
 
 } // namespace predibloom::api

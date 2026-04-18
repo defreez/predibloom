@@ -1,4 +1,5 @@
 #include "kalshi_client.hpp"
+#include "http_cache.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -87,27 +88,37 @@ Result<EventsResponse> KalshiClient::getEvents(const GetEventsParams& params) {
 }
 
 Result<MarketsResponse> KalshiClient::getMarkets(const GetMarketsParams& params) {
-    rate_limiter_.wait_for_token();
-
     std::string path = std::string(API_BASE) + "/markets" + buildQueryString(params);
-    auto res = client_->Get(path);
+    auto cache_key = HttpCache::key(API_HOST, path);
 
-    if (!res) {
-        return Error(ApiError::NetworkError,
-            "Network error: " + httplib::to_string(res.error()));
-    }
+    std::string body;
+    auto cached = caching_ ? HttpCache::get(cache_key) : std::nullopt;
+    if (cached) {
+        body = *cached;
+    } else {
+        rate_limiter_.wait_for_token();
+        auto res = client_->Get(path);
 
-    if (res->status == 429) {
-        return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
-    }
+        if (!res) {
+            return Error(ApiError::NetworkError,
+                "Network error: " + httplib::to_string(res.error()));
+        }
 
-    if (res->status != 200) {
-        return Error(ApiError::HttpError,
-            "HTTP error: " + std::to_string(res->status), res->status);
+        if (res->status == 429) {
+            return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
+        }
+
+        if (res->status != 200) {
+            return Error(ApiError::HttpError,
+                "HTTP error: " + std::to_string(res->status), res->status);
+        }
+
+        body = res->body;
+        if (caching_) HttpCache::put(cache_key, body);
     }
 
     try {
-        auto json = nlohmann::json::parse(res->body);
+        auto json = nlohmann::json::parse(body);
         return json.get<MarketsResponse>();
     } catch (const nlohmann::json::exception& e) {
         return Error(ApiError::ParseError,
@@ -174,31 +185,42 @@ Result<std::vector<Market>> KalshiClient::getAllMarkets(const GetMarketsParams& 
 }
 
 Result<TradesResponse> KalshiClient::getTrades(const GetTradesParams& params) {
-    rate_limiter_.wait_for_token();
+    std::ostringstream path_ss;
+    path_ss << API_BASE << "/markets/trades?ticker=" << params.ticker;
+    if (params.limit) path_ss << "&limit=" << *params.limit;
+    if (params.cursor) path_ss << "&cursor=" << *params.cursor;
+    std::string path = path_ss.str();
 
-    std::ostringstream path;
-    path << API_BASE << "/markets/trades?ticker=" << params.ticker;
-    if (params.limit) path << "&limit=" << *params.limit;
-    if (params.cursor) path << "&cursor=" << *params.cursor;
+    auto cache_key = HttpCache::key(API_HOST, path);
 
-    auto res = client_->Get(path.str());
+    std::string body;
+    auto cached = caching_ ? HttpCache::get(cache_key) : std::nullopt;
+    if (cached) {
+        body = *cached;
+    } else {
+        rate_limiter_.wait_for_token();
+        auto res = client_->Get(path);
 
-    if (!res) {
-        return Error(ApiError::NetworkError,
-            "Network error: " + httplib::to_string(res.error()));
-    }
+        if (!res) {
+            return Error(ApiError::NetworkError,
+                "Network error: " + httplib::to_string(res.error()));
+        }
 
-    if (res->status == 429) {
-        return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
-    }
+        if (res->status == 429) {
+            return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
+        }
 
-    if (res->status != 200) {
-        return Error(ApiError::HttpError,
-            "HTTP error: " + std::to_string(res->status), res->status);
+        if (res->status != 200) {
+            return Error(ApiError::HttpError,
+                "HTTP error: " + std::to_string(res->status), res->status);
+        }
+
+        body = res->body;
+        if (caching_) HttpCache::put(cache_key, body);
     }
 
     try {
-        auto json = nlohmann::json::parse(res->body);
+        auto json = nlohmann::json::parse(body);
         return json.get<TradesResponse>();
     } catch (const nlohmann::json::exception& e) {
         return Error(ApiError::ParseError,

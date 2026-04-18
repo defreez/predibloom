@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iomanip>
 #include <map>
+#include <cmath>
 
 namespace {
 
@@ -136,6 +137,7 @@ int main(int argc, char** argv) {
     auto* winners_cmd = app.add_subcommand("winners", "Price history for settled brackets with weather overlay");
     auto* backtest_cmd = app.add_subcommand("backtest", "Backtest trading strategy using forecasts");
     auto* predict_cmd = app.add_subcommand("predict", "Predict trade for a given day");
+    auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset by comparing Open-Meteo vs NWS actuals");
 
     // Markets command options
     std::string markets_status = "open";
@@ -236,27 +238,26 @@ int main(int argc, char** argv) {
     std::vector<std::string> backtest_series;
     std::string backtest_start;
     std::string backtest_end;
-    double backtest_margin = 3.0;      // Only trade if forecast is this far from bracket edge
+    double backtest_margin = 0.0;      // Only trade if forecast is this far from bracket edge
     double backtest_min_price = 5.0;   // Only buy if price is at least this (cents)
     double backtest_max_price = 40.0;  // Only buy if price is below this (cents)
-    double backtest_trade_size = 10.0; // Dollars per trade (0 = use 10x margin)
+    double backtest_trade_size = 0.0;  // Dollars per trade (0 = use 10x margin)
     int backtest_entry_hour = 5;       // 5am UTC = 9pm PST previous day
 
-    backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (e.g., KXHIGHNY,KXHIGHLAX)")
-        ->required()
+    backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (default: all configured)")
         ->delimiter(',');
     backtest_cmd->add_option("--start", backtest_start, "Start date YYYY-MM-DD")
         ->required();
     backtest_cmd->add_option("--end", backtest_end, "End date YYYY-MM-DD")
         ->required();
     backtest_cmd->add_option("--margin", backtest_margin, "Min distance from bracket edge to trade (°F)")
-        ->default_val(3.0);
+        ->default_val(0.0);
     backtest_cmd->add_option("--min-price", backtest_min_price, "Min price to pay (cents)")
         ->default_val(5.0);
     backtest_cmd->add_option("--max-price", backtest_max_price, "Max price to pay (cents)")
         ->default_val(40.0);
-    backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade (0 = $10 per °F margin)")
-        ->default_val(10.0);
+    backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade (default: $10 per °F margin)")
+        ->default_val(0.0);
     backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour UTC on settlement day (5 = 9pm PST night before)")
         ->default_val(5)
         ->check(CLI::Range(0, 23));
@@ -271,6 +272,18 @@ int main(int argc, char** argv) {
         ->required();
     predict_cmd->add_option("--margin", predict_margin, "Min margin from bracket edge (°F)")
         ->default_val(2.0);
+
+    // Calibrate command options
+    std::vector<std::string> calibrate_series;
+    std::string calibrate_start;
+    std::string calibrate_end;
+
+    calibrate_cmd->add_option("-s,--series", calibrate_series, "Series ticker(s) (default: all configured)")
+        ->delimiter(',');
+    calibrate_cmd->add_option("--start", calibrate_start, "Start date YYYY-MM-DD")
+        ->required();
+    calibrate_cmd->add_option("--end", calibrate_end, "End date YYYY-MM-DD")
+        ->required();
 
     // Require at least one subcommand
     app.require_subcommand(1);
@@ -559,6 +572,21 @@ int main(int argc, char** argv) {
 
     // Handle backtest command
     if (*backtest_cmd) {
+        // Default to all configured series with weather params
+        if (backtest_series.empty()) {
+            for (const auto& tab : config.tabs) {
+                for (const auto& sc : tab.series) {
+                    if (sc.latitude != 0 && !sc.nws_station.empty()) {
+                        backtest_series.push_back(sc.series_ticker);
+                    }
+                }
+            }
+            if (backtest_series.empty()) {
+                std::cerr << "No series with weather params configured\n";
+                return 1;
+            }
+        }
+
         // Validate all series first
         for (const auto& series : backtest_series) {
             auto* sc = config.findSeries(series);
@@ -571,6 +599,9 @@ int main(int argc, char** argv) {
 
         predibloom::api::OpenMeteoClient openmeteo;
         predibloom::api::NwsClient nws;
+        client.setCaching(true);
+        openmeteo.setCaching(true);
+        nws.setCaching(true);
 
         std::cerr << "Backtest parameters:\n";
         std::cerr << "  Series: ";
@@ -613,7 +644,24 @@ int main(int argc, char** argv) {
         std::vector<Trade> trades;
         double total_pnl_dollars = 0;
         double total_deployed = 0;
-        int wins = 0, losses = 0, skipped = 0;
+        int wins = 0, losses = 0;
+
+        // Categorized skip reasons for diagnostics
+        struct SkipReasons {
+            int no_forecast = 0;
+            int no_nws_data = 0;
+            int between_brackets = 0;
+            int margin_too_small = 0;
+            int no_trades_at_entry = 0;
+            int price_too_high = 0;
+            int price_too_low = 0;
+            int trade_fetch_error = 0;
+            int total() const {
+                return no_forecast + no_nws_data + between_brackets +
+                       margin_too_small + no_trades_at_entry +
+                       price_too_high + price_too_low + trade_fetch_error;
+            }
+        } skip;
 
         // Process each series
         for (const auto& current_series : backtest_series) {
@@ -686,7 +734,18 @@ int main(int argc, char** argv) {
                             nws_highs[obs.date] = obs.high;
                         }
                     }
+                } else {
+                    std::cerr << "WARNING: NWS data fetch failed for " << series_config->nws_station
+                              << " year " << year << ": " << nws_result.error().message << "\n";
                 }
+            }
+
+            if (nws_highs.empty()) {
+                std::cerr << "ERROR: No NWS data for " << series_config->nws_station
+                          << " in range " << backtest_start << " to " << backtest_end << "\n";
+                std::cerr << "  All " << markets_by_date.size() << " trading days will be skipped\n";
+                skip.no_nws_data += markets_by_date.size();
+                continue;
             }
 
         // Process each day
@@ -694,7 +753,7 @@ int main(int argc, char** argv) {
             // Get forecast for this date
             auto forecast_opt = predibloom::api::getTemperatureForDate(forecast_result.value(), date);
             if (!forecast_opt) {
-                skipped++;
+                skip.no_forecast++;
                 continue;
             }
 
@@ -703,7 +762,7 @@ int main(int argc, char** argv) {
 
             // Get NWS actual
             if (nws_highs.find(date) == nws_highs.end()) {
-                skipped++;
+                skip.no_nws_data++;
                 continue;
             }
             int nws_actual = nws_highs.at(date);
@@ -728,20 +787,20 @@ int main(int argc, char** argv) {
             const predibloom::api::Market* target_market = target ? target->market : nullptr;
 
             if (!target_market) {
-                skipped++;
+                skip.between_brackets++;
                 continue;
             }
 
             // Check margin requirement
             if (margin_from_edge < backtest_margin) {
-                skipped++;  // Too close to edge, skip
+                skip.margin_too_small++;
                 continue;
             }
 
             // Get entry price at specific hour on settlement day
             auto trades_result = client.getAllTrades(target_market->ticker);
             if (!trades_result.ok()) {
-                skipped++;
+                skip.trade_fetch_error++;
                 continue;
             }
 
@@ -767,17 +826,17 @@ int main(int argc, char** argv) {
             }
 
             if (entry_price < 0) {
-                skipped++;  // No trade before entry time
+                skip.no_trades_at_entry++;
                 continue;
             }
 
             // Check if price is within our range
             if (entry_price > backtest_max_price) {
-                skipped++;  // Price too high at entry time
+                skip.price_too_high++;
                 continue;
             }
             if (entry_price < backtest_min_price) {
-                skipped++;  // Price too low (outlier)
+                skip.price_too_low++;
                 continue;
             }
 
@@ -888,7 +947,25 @@ int main(int argc, char** argv) {
                       << std::showpos << std::fixed << std::setprecision(2) << "$" << unbounded_pnl << std::noshowpos << "\n";
         }
 
-        std::cout << "  Skipped: " << skipped << " days\n";
+        std::cout << "  Skipped: " << skip.total() << " days\n";
+        if (skip.total() > 0) {
+            if (skip.no_nws_data > 0)
+                std::cout << "    no NWS data:        " << skip.no_nws_data << "\n";
+            if (skip.no_forecast > 0)
+                std::cout << "    no forecast:        " << skip.no_forecast << "\n";
+            if (skip.between_brackets > 0)
+                std::cout << "    between brackets:   " << skip.between_brackets << "\n";
+            if (skip.margin_too_small > 0)
+                std::cout << "    margin too small:   " << skip.margin_too_small << "\n";
+            if (skip.no_trades_at_entry > 0)
+                std::cout << "    no trades at entry: " << skip.no_trades_at_entry << "\n";
+            if (skip.price_too_high > 0)
+                std::cout << "    price too high:     " << skip.price_too_high << "\n";
+            if (skip.price_too_low > 0)
+                std::cout << "    price too low:      " << skip.price_too_low << "\n";
+            if (skip.trade_fetch_error > 0)
+                std::cout << "    trade fetch error:  " << skip.trade_fetch_error << "\n";
+        }
         std::cout << "  Deployed: $" << std::fixed << std::setprecision(2) << total_deployed << "\n";
         std::cout << "  Total P&L: " << std::showpos << "$" << total_pnl_dollars << std::noshowpos << "\n";
 
@@ -1097,6 +1174,218 @@ int main(int argc, char** argv) {
                     std::cout << "  " << p.ticker << " (" << p.label << " " << p.strike << " @ " << (int)p.ask << "¢)\n";
                 }
             }
+        }
+    }
+
+    // Handle calibrate command
+    if (*calibrate_cmd) {
+        // Default to all configured series with weather params
+        if (calibrate_series.empty()) {
+            for (const auto& tab : config.tabs) {
+                for (const auto& sc : tab.series) {
+                    if (sc.latitude != 0 && !sc.nws_station.empty()) {
+                        calibrate_series.push_back(sc.series_ticker);
+                    }
+                }
+            }
+            if (calibrate_series.empty()) {
+                std::cerr << "No series with weather params configured\n";
+                return 1;
+            }
+        }
+
+        // Validate all series
+        for (const auto& series : calibrate_series) {
+            auto* sc = config.findSeries(series);
+            if (!sc || sc->nws_station.empty()) {
+                std::cerr << "Series not configured or missing weather params: " << series << "\n";
+                return 1;
+            }
+        }
+
+        predibloom::api::OpenMeteoClient openmeteo;
+        predibloom::api::NwsClient nws;
+        openmeteo.setCaching(true);
+        nws.setCaching(true);
+
+        struct SeriesSummary {
+            std::string label;
+            double current_offset;
+            int count;
+            double mean_offset;
+            double mae;
+            double rmse;
+        };
+        std::vector<SeriesSummary> summaries;
+
+        for (const auto& current_series : calibrate_series) {
+            auto* series_config = config.findSeries(current_series);
+
+            std::cerr << "Calibrating " << series_config->label
+                      << " (" << current_series << ", station " << series_config->nws_station << ")...\n";
+
+            // Fetch Open-Meteo historical forecasts
+            auto forecast_result = openmeteo.getHistoricalForecast(
+                series_config->latitude, series_config->longitude,
+                calibrate_start, calibrate_end);
+
+            if (!forecast_result.ok()) {
+                std::cerr << "  Error fetching forecasts: " << forecast_result.error().message << "\n";
+                continue;
+            }
+
+            // Fetch NWS actual data
+            int start_year = std::stoi(calibrate_start.substr(0, 4));
+            int end_year = std::stoi(calibrate_end.substr(0, 4));
+            std::map<std::string, int> nws_highs;
+
+            for (int year = start_year; year <= end_year; year++) {
+                auto nws_result = nws.getCliData(series_config->nws_station, year);
+                if (nws_result.ok()) {
+                    for (const auto& obs : nws_result.value()) {
+                        if (obs.date >= calibrate_start && obs.date <= calibrate_end) {
+                            nws_highs[obs.date] = obs.high;
+                        }
+                    }
+                } else {
+                    std::cerr << "  WARNING: NWS data fetch failed for year " << year
+                              << ": " << nws_result.error().message << "\n";
+                }
+            }
+
+            if (nws_highs.empty()) {
+                std::cerr << "  ERROR: No NWS data available, skipping\n";
+                continue;
+            }
+
+            // Build per-day comparisons
+            struct DayComparison {
+                std::string date;
+                double forecast;
+                int nws_actual;
+                double error;  // NWS - OpenMeteo
+            };
+            std::vector<DayComparison> days;
+
+            const auto& times = forecast_result.value().daily.time;
+            const auto& temps = forecast_result.value().daily.temperature_2m_max;
+
+            for (size_t i = 0; i < times.size() && i < temps.size(); i++) {
+                const std::string& date = times[i];
+                double forecast_temp = temps[i];
+
+                if (std::isnan(forecast_temp)) continue;
+                if (date < calibrate_start || date > calibrate_end) continue;
+
+                auto nws_it = nws_highs.find(date);
+                if (nws_it == nws_highs.end()) continue;
+
+                DayComparison d;
+                d.date = date;
+                d.forecast = forecast_temp;
+                d.nws_actual = nws_it->second;
+                d.error = static_cast<double>(d.nws_actual) - d.forecast;
+                days.push_back(d);
+            }
+
+            if (days.empty()) {
+                std::cerr << "  No matching days found\n";
+                continue;
+            }
+
+            // Compute stats
+            double sum_error = 0, sum_abs_error = 0, sum_sq_error = 0;
+            for (const auto& d : days) {
+                sum_error += d.error;
+                sum_abs_error += std::abs(d.error);
+                sum_sq_error += d.error * d.error;
+            }
+            int n = static_cast<int>(days.size());
+            double mean_offset = sum_error / n;
+            double mae = sum_abs_error / n;
+            double rmse = std::sqrt(sum_sq_error / n);
+
+            // Print per-day table
+            std::cout << "\n=== " << series_config->label << " (" << current_series
+                      << ", station " << series_config->nws_station << ") ===\n\n";
+
+            std::cout << std::left << std::setw(12) << "Date"
+                      << std::right << std::setw(10) << "Forecast"
+                      << std::setw(10) << "NWS"
+                      << std::setw(10) << "Error"
+                      << "\n";
+            std::cout << std::string(42, '-') << "\n";
+
+            for (const auto& d : days) {
+                char forecast_buf[16], error_buf[16];
+                snprintf(forecast_buf, sizeof(forecast_buf), "%.1f", d.forecast);
+                snprintf(error_buf, sizeof(error_buf), "%+.1f", d.error);
+
+                std::cout << std::left << std::setw(12) << d.date
+                          << std::right << std::setw(10) << forecast_buf
+                          << std::setw(10) << d.nws_actual
+                          << std::setw(10) << error_buf
+                          << "\n";
+            }
+
+            std::cout << std::string(42, '-') << "\n";
+            char offset_str[16];
+            snprintf(offset_str, sizeof(offset_str), "%+.1f", mean_offset);
+            char current_str[16];
+            snprintf(current_str, sizeof(current_str), "%+.1f", series_config->offset);
+
+            std::cout << "\n  Days compared: " << n << "\n";
+            std::cout << "  Mean offset (recommended): " << offset_str << " F\n";
+            std::cout << "  MAE:  " << std::fixed << std::setprecision(1) << mae << " F\n";
+            std::cout << "  RMSE: " << std::fixed << std::setprecision(1) << rmse << " F\n";
+            std::cout << "  Current config offset: " << current_str << " F\n";
+
+            summaries.push_back({
+                series_config->label,
+                series_config->offset,
+                n,
+                mean_offset,
+                mae,
+                rmse
+            });
+        }
+
+        // Multi-series summary table
+        if (summaries.size() > 1) {
+            std::cout << "\n\n=== CALIBRATION SUMMARY ===\n\n";
+
+            std::cout << std::left << std::setw(18) << "City"
+                      << std::right << std::setw(6) << "Days"
+                      << std::setw(10) << "Offset"
+                      << std::setw(8) << "MAE"
+                      << std::setw(8) << "RMSE"
+                      << std::setw(10) << "Current"
+                      << std::setw(8) << "Delta"
+                      << "\n";
+            std::cout << std::string(68, '-') << "\n";
+
+            for (const auto& s : summaries) {
+                double delta = s.mean_offset - s.current_offset;
+                char offset_buf[16], mae_buf[16], rmse_buf[16], current_buf[16], delta_buf[16];
+                snprintf(offset_buf, sizeof(offset_buf), "%+.1f", s.mean_offset);
+                snprintf(mae_buf, sizeof(mae_buf), "%.1f", s.mae);
+                snprintf(rmse_buf, sizeof(rmse_buf), "%.1f", s.rmse);
+                snprintf(current_buf, sizeof(current_buf), "%+.1f", s.current_offset);
+                snprintf(delta_buf, sizeof(delta_buf), "%+.1f", delta);
+
+                std::cout << std::left << std::setw(18) << s.label
+                          << std::right << std::setw(6) << s.count
+                          << std::setw(10) << offset_buf
+                          << std::setw(8) << mae_buf
+                          << std::setw(8) << rmse_buf
+                          << std::setw(10) << current_buf
+                          << std::setw(8) << delta_buf
+                          << "\n";
+            }
+
+            std::cout << std::string(68, '-') << "\n";
+            std::cout << "\nOffset = mean(NWS_actual - OpenMeteo_forecast)\n";
+            std::cout << "Delta = recommended offset - current config offset\n";
         }
     }
 

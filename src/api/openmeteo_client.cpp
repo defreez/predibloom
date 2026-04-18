@@ -1,4 +1,5 @@
 #include "openmeteo_client.hpp"
+#include "http_cache.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -51,8 +52,6 @@ Result<WeatherResponse> OpenMeteoClient::fetchWeather(
     const std::string& start_date,
     const std::string& end_date) {
 
-    rate_limiter_.wait_for_token();
-
     // Select the appropriate client
     httplib::SSLClient* client = nullptr;
     if (host == ARCHIVE_HOST) {
@@ -63,36 +62,49 @@ Result<WeatherResponse> OpenMeteoClient::fetchWeather(
 
     // Build query path
     // Archive API uses /v1/archive, historical-forecast API uses /v1/forecast
-    std::ostringstream path;
+    std::ostringstream path_ss;
     const char* endpoint = (host == ARCHIVE_HOST) ? "/v1/archive?" : "/v1/forecast?";
-    path << endpoint
-         << "latitude=" << latitude
-         << "&longitude=" << longitude
-         << "&start_date=" << start_date
-         << "&end_date=" << end_date
-         << "&daily=temperature_2m_max"
-         << "&temperature_unit=fahrenheit"
-         << "&timezone=America/New_York";
+    path_ss << endpoint
+            << "latitude=" << latitude
+            << "&longitude=" << longitude
+            << "&start_date=" << start_date
+            << "&end_date=" << end_date
+            << "&daily=temperature_2m_max"
+            << "&temperature_unit=fahrenheit"
+            << "&timezone=America/New_York";
+    std::string path = path_ss.str();
 
-    auto res = client->Get(path.str());
+    auto cache_key = HttpCache::key(host, path);
 
-    if (!res) {
-        return Error(ApiError::NetworkError,
-            "Network error: " + httplib::to_string(res.error()));
-    }
+    std::string body;
+    auto cached = caching_ ? HttpCache::get(cache_key) : std::nullopt;
+    if (cached) {
+        body = *cached;
+    } else {
+        rate_limiter_.wait_for_token();
+        auto res = client->Get(path);
 
-    if (res->status == 429) {
-        return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
-    }
+        if (!res) {
+            return Error(ApiError::NetworkError,
+                "Network error: " + httplib::to_string(res.error()));
+        }
 
-    if (res->status != 200) {
-        return Error(ApiError::HttpError,
-            "HTTP error: " + std::to_string(res->status) + " - " + res->body,
-            res->status);
+        if (res->status == 429) {
+            return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
+        }
+
+        if (res->status != 200) {
+            return Error(ApiError::HttpError,
+                "HTTP error: " + std::to_string(res->status) + " - " + res->body,
+                res->status);
+        }
+
+        body = res->body;
+        if (caching_) HttpCache::put(cache_key, body);
     }
 
     try {
-        auto json = nlohmann::json::parse(res->body);
+        auto json = nlohmann::json::parse(body);
         return json.get<WeatherResponse>();
     } catch (const nlohmann::json::exception& e) {
         return Error(ApiError::ParseError,

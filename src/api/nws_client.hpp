@@ -49,8 +49,11 @@ public:
         const std::string& station,
         const std::string& date);
 
+    void setCaching(bool enabled) { caching_ = enabled; }
+
 private:
     std::unique_ptr<httplib::SSLClient> client_;
+    bool caching_ = false;
 };
 
 // Station identifiers for common markets

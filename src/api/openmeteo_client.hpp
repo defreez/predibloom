@@ -36,6 +36,8 @@ public:
         const std::string& start_date,
         const std::string& end_date);
 
+    void setCaching(bool enabled) { caching_ = enabled; }
+
 private:
     Result<WeatherResponse> fetchWeather(
         const std::string& host,
@@ -47,6 +49,7 @@ private:
     std::unique_ptr<httplib::SSLClient> archive_client_;
     std::unique_ptr<httplib::SSLClient> forecast_client_;
     RateLimiter rate_limiter_;
+    bool caching_ = false;
 };
 
 } // namespace predibloom::api

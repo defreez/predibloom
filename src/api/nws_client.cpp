@@ -1,4 +1,7 @@
 #include "nws_client.hpp"
+#include "http_cache.hpp"
+
+#include <optional>
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -26,20 +29,31 @@ Result<std::vector<CliObservation>> NwsClient::getCliData(
     std::string path = "/json/cli.py?station=" + station +
                        "&year=" + std::to_string(year);
 
-    auto res = client_->Get(path);
+    auto cache_key = HttpCache::key(IEM_HOST, path);
 
-    if (!res) {
-        return Error(ApiError::NetworkError,
-            "Network error: " + httplib::to_string(res.error()));
-    }
+    std::string body;
+    auto cached = caching_ ? HttpCache::get(cache_key) : std::nullopt;
+    if (cached) {
+        body = *cached;
+    } else {
+        auto res = client_->Get(path);
 
-    if (res->status != 200) {
-        return Error(ApiError::HttpError,
-            "HTTP error: " + std::to_string(res->status), res->status);
+        if (!res) {
+            return Error(ApiError::NetworkError,
+                "Network error: " + httplib::to_string(res.error()));
+        }
+
+        if (res->status != 200) {
+            return Error(ApiError::HttpError,
+                "HTTP error: " + std::to_string(res->status), res->status);
+        }
+
+        body = res->body;
+        if (caching_) HttpCache::put(cache_key, body);
     }
 
     try {
-        auto json = nlohmann::json::parse(res->body);
+        auto json = nlohmann::json::parse(body);
         std::vector<CliObservation> observations;
 
         if (!json.contains("results") || !json["results"].is_array()) {
@@ -51,21 +65,41 @@ Result<std::vector<CliObservation>> NwsClient::getCliData(
             obs.station = item.value("station", "");
             obs.date = item.value("valid", "");
 
-            // High/low are required
+            // High/low are required (NWS API sometimes returns these as strings)
             if (!item.contains("high") || item["high"].is_null() ||
                 !item.contains("low") || item["low"].is_null()) {
                 continue;  // Skip incomplete records
             }
 
-            obs.high = item["high"].get<int>();
-            obs.low = item["low"].get<int>();
+            auto parse_int = [](const nlohmann::json& v) -> int {
+                if (v.is_number()) return v.get<int>();
+                if (v.is_string()) return std::stoi(v.get<std::string>());
+                throw nlohmann::json::type_error::create(302,
+                    "type must be number or string, but is " + std::string(v.type_name()), &v);
+            };
 
-            // Precip/snow are optional
-            if (item.contains("precip") && item["precip"].is_number()) {
-                obs.precip = item["precip"].get<double>();
+            try {
+                obs.high = parse_int(item["high"]);
+                obs.low = parse_int(item["low"]);
+            } catch (...) {
+                continue;  // Skip unparseable records
             }
-            if (item.contains("snow") && item["snow"].is_number()) {
-                obs.snow = item["snow"].get<double>();
+
+            // Precip/snow are optional (may also be strings)
+            auto parse_double = [](const nlohmann::json& v) -> std::optional<double> {
+                if (v.is_number()) return v.get<double>();
+                if (v.is_string()) {
+                    try { return std::stod(v.get<std::string>()); }
+                    catch (...) { return std::nullopt; }
+                }
+                return std::nullopt;
+            };
+
+            if (item.contains("precip") && !item["precip"].is_null()) {
+                if (auto v = parse_double(item["precip"])) obs.precip = *v;
+            }
+            if (item.contains("snow") && !item["snow"].is_null()) {
+                if (auto v = parse_double(item["snow"])) obs.snow = *v;
             }
 
             observations.push_back(std::move(obs));
