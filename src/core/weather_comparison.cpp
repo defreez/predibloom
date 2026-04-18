@@ -11,20 +11,26 @@ WeatherComparisonService::WeatherComparisonService(
     , openmeteo_(openmeteo) {
 }
 
+void WeatherComparisonService::setLocation(double latitude, double longitude, bool is_low_temp) {
+    latitude_ = latitude;
+    longitude_ = longitude;
+    is_low_temp_ = is_low_temp;
+}
+
 api::Result<ComparisonPoint> WeatherComparisonService::getPoint(const api::Market& market) {
     ComparisonPoint point;
     point.market_ticker = market.ticker;
     point.kalshi_price = market.last_price_cents();
     point.settlement = market.result;
 
-    // Parse ticker for date (and fallback strikes)
-    auto ticker_info = parseHighNYTicker(market.ticker);
-    if (!ticker_info.valid) {
+    // Parse date from event_ticker (works for any series)
+    std::string date = parseDateFromEventTicker(market.event_ticker);
+    if (date.empty()) {
         return api::Error(api::ApiError::ParseError,
-            "Could not parse ticker: " + market.ticker);
+            "Could not parse date from event_ticker: " + market.event_ticker);
     }
 
-    point.date = ticker_info.date;
+    point.date = date;
 
     // Use API-provided strikes directly
     point.floor_strike = market.floor_strike;
@@ -32,17 +38,21 @@ api::Result<ComparisonPoint> WeatherComparisonService::getPoint(const api::Marke
 
     // Fetch weather data for this date
     auto actual_result = openmeteo_.getHistoricalWeather(
-        NYC_LATITUDE, NYC_LONGITUDE, ticker_info.date, ticker_info.date);
+        latitude_, longitude_, date, date);
 
     if (actual_result.ok()) {
-        point.actual_high = getTemperatureForDate(actual_result.value(), ticker_info.date);
+        point.actual_temp = is_low_temp_
+            ? getMinTemperatureForDate(actual_result.value(), date)
+            : getTemperatureForDate(actual_result.value(), date);
     }
 
     auto forecast_result = openmeteo_.getHistoricalForecast(
-        NYC_LATITUDE, NYC_LONGITUDE, ticker_info.date, ticker_info.date);
+        latitude_, longitude_, date, date);
 
     if (forecast_result.ok()) {
-        point.forecast_high = getTemperatureForDate(forecast_result.value(), ticker_info.date);
+        point.forecast_temp = is_low_temp_
+            ? getMinTemperatureForDate(forecast_result.value(), date)
+            : getTemperatureForDate(forecast_result.value(), date);
     }
 
     return point;
@@ -67,10 +77,10 @@ api::Result<ComparisonSummary> WeatherComparisonService::analyze(
 
     // Fetch weather data for the full range
     auto actual_result = openmeteo_.getHistoricalWeather(
-        NYC_LATITUDE, NYC_LONGITUDE, start_date, end_date);
+        latitude_, longitude_, start_date, end_date);
 
     auto forecast_result = openmeteo_.getHistoricalForecast(
-        NYC_LATITUDE, NYC_LONGITUDE, start_date, end_date);
+        latitude_, longitude_, start_date, end_date);
 
     // Process each market
     double forecast_error_sum = 0.0;
@@ -78,19 +88,15 @@ api::Result<ComparisonSummary> WeatherComparisonService::analyze(
     int total_predictions = 0;
 
     for (const auto& market : markets_result.value()) {
-        auto ticker_info = parseHighNYTicker(market.ticker);
-        if (!ticker_info.valid) {
-            continue;
-        }
+        std::string date = parseDateFromEventTicker(market.event_ticker);
+        if (date.empty()) continue;
 
         // Check if market date is within our range
-        if (ticker_info.date < start_date || ticker_info.date > end_date) {
-            continue;
-        }
+        if (date < start_date || date > end_date) continue;
 
         ComparisonPoint point;
         point.market_ticker = market.ticker;
-        point.date = ticker_info.date;
+        point.date = date;
         point.kalshi_price = market.last_price_cents();
         point.settlement = market.result;
         // Use API-provided strikes directly
@@ -99,33 +105,37 @@ api::Result<ComparisonSummary> WeatherComparisonService::analyze(
 
         // Get weather data for this date
         if (actual_result.ok()) {
-            point.actual_high = getTemperatureForDate(actual_result.value(), ticker_info.date);
-            if (point.actual_high.has_value()) {
+            point.actual_temp = is_low_temp_
+                ? getMinTemperatureForDate(actual_result.value(), date)
+                : getTemperatureForDate(actual_result.value(), date);
+            if (point.actual_temp.has_value()) {
                 summary.markets_with_actual++;
             }
         }
 
         if (forecast_result.ok()) {
-            point.forecast_high = getTemperatureForDate(forecast_result.value(), ticker_info.date);
-            if (point.forecast_high.has_value()) {
+            point.forecast_temp = is_low_temp_
+                ? getMinTemperatureForDate(forecast_result.value(), date)
+                : getTemperatureForDate(forecast_result.value(), date);
+            if (point.forecast_temp.has_value()) {
                 summary.markets_with_forecast++;
             }
         }
 
         // Calculate forecast accuracy if we have both
-        if (point.forecast_high.has_value() && point.actual_high.has_value()) {
-            forecast_error_sum += std::abs(point.forecast_high.value() - point.actual_high.value());
+        if (point.forecast_temp.has_value() && point.actual_temp.has_value()) {
+            forecast_error_sum += std::abs(point.forecast_temp.value() - point.actual_temp.value());
         }
 
         // Check market prediction accuracy
-        if (!market.result.empty() && point.actual_high.has_value() &&
+        if (!market.result.empty() && point.actual_temp.has_value() &&
             (point.floor_strike.has_value() || point.cap_strike.has_value())) {
 
             summary.settled_markets++;
 
             bool market_predicted_yes = point.kalshi_price >= 50.0;
             bool actual_was_yes = wouldSettleYes(
-                point.actual_high.value(),
+                point.actual_temp.value(),
                 point.floor_strike,
                 point.cap_strike);
 

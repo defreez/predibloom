@@ -338,8 +338,8 @@ inline void printComparisonTable(const core::ComparisonSummary& summary) {
                   << std::setw(24) << truncate(pt.market_ticker, 23)
                   << std::setw(10) << formatStrikeRange(pt.floor_strike, pt.cap_strike)
                   << std::setw(10) << formatPrice(pt.kalshi_price)
-                  << std::setw(12) << formatTemp(pt.forecast_high)
-                  << std::setw(12) << formatTemp(pt.actual_high)
+                  << std::setw(12) << formatTemp(pt.forecast_temp)
+                  << std::setw(12) << formatTemp(pt.actual_temp)
                   << std::setw(10) << (pt.settlement.empty() ? "-" : pt.settlement)
                   << "\n";
     }
@@ -363,16 +363,16 @@ inline void printComparisonJson(const core::ComparisonSummary& summary) {
         point["market_ticker"] = pt.market_ticker;
         point["kalshi_price"] = pt.kalshi_price;
 
-        if (pt.forecast_high.has_value()) {
-            point["forecast_high"] = pt.forecast_high.value();
+        if (pt.forecast_temp.has_value()) {
+            point["forecast_temp"] = pt.forecast_temp.value();
         } else {
-            point["forecast_high"] = nullptr;
+            point["forecast_temp"] = nullptr;
         }
 
-        if (pt.actual_high.has_value()) {
-            point["actual_high"] = pt.actual_high.value();
+        if (pt.actual_temp.has_value()) {
+            point["actual_temp"] = pt.actual_temp.value();
         } else {
-            point["actual_high"] = nullptr;
+            point["actual_temp"] = nullptr;
         }
 
         point["settlement"] = pt.settlement;
@@ -392,15 +392,15 @@ inline void printComparisonJson(const core::ComparisonSummary& summary) {
 
 // Print comparison as CSV
 inline void printComparisonCsv(const core::ComparisonSummary& summary) {
-    std::cout << "date,ticker,floor_strike,cap_strike,kalshi_price,forecast_high,actual_high,settlement\n";
+    std::cout << "date,ticker,floor_strike,cap_strike,kalshi_price,forecast_temp,actual_temp,settlement\n";
     for (const auto& pt : summary.points) {
         std::cout << pt.date << ","
                   << pt.market_ticker << ","
                   << (pt.floor_strike.has_value() ? std::to_string(pt.floor_strike.value()) : "") << ","
                   << (pt.cap_strike.has_value() ? std::to_string(pt.cap_strike.value()) : "") << ","
                   << pt.kalshi_price << ","
-                  << (pt.forecast_high.has_value() ? std::to_string(pt.forecast_high.value()) : "") << ","
-                  << (pt.actual_high.has_value() ? std::to_string(pt.actual_high.value()) : "") << ","
+                  << (pt.forecast_temp.has_value() ? std::to_string(pt.forecast_temp.value()) : "") << ","
+                  << (pt.actual_temp.has_value() ? std::to_string(pt.actual_temp.value()) : "") << ","
                   << pt.settlement << "\n";
     }
 }

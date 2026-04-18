@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
     double backtest_min_price = 5.0;   // Only buy if price is at least this (cents)
     double backtest_max_price = 40.0;  // Only buy if price is below this (cents)
     double backtest_trade_size = 0.0;  // Dollars per trade (0 = use 10x margin)
-    int backtest_entry_hour = 5;       // 5am UTC = 9pm PST previous day
+    int backtest_entry_hour = -1;      // -1 = use per-series config (5 high, 17 low)
     int backtest_exit_hour = -1;       // -1 = hold to settlement
 
     backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (default: all configured)")
@@ -260,9 +260,9 @@ int main(int argc, char** argv) {
         ->default_val(40.0);
     backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade (default: $10 per °F margin)")
         ->default_val(0.0);
-    backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour UTC on settlement day (5 = 9pm PST night before)")
-        ->default_val(5)
-        ->check(CLI::Range(0, 23));
+    backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour UTC override (-1 = use per-series config)")
+        ->default_val(-1)
+        ->check(CLI::Range(-1, 23));
     backtest_cmd->add_option("--exit-hour", backtest_exit_hour, "Hour UTC to exit (-1 = hold to settlement)")
         ->default_val(-1)
         ->check(CLI::Range(-1, 23));
@@ -271,12 +271,15 @@ int main(int argc, char** argv) {
     std::string predict_series;
     std::string predict_date;
     double predict_margin = 2.0;
+    double predict_max_price = 40.0;
 
     predict_cmd->add_option("-s,--series", predict_series, "Series ticker (optional, defaults to all configured)");
     predict_cmd->add_option("-d,--date", predict_date, "Date to predict (YYYY-MM-DD)")
         ->required();
     predict_cmd->add_option("--margin", predict_margin, "Min margin from bracket edge (°F)")
         ->default_val(2.0);
+    predict_cmd->add_option("--max-price", predict_max_price, "Max price to pay (cents)")
+        ->default_val(40.0);
 
     // Calibrate command options
     std::vector<std::string> calibrate_series;
@@ -365,8 +368,17 @@ int main(int argc, char** argv) {
 
     // Handle compare command
     if (*compare_cmd) {
+        auto* series_config = config.findSeries(compare_series);
+        if (!series_config || series_config->latitude == 0) {
+            std::cerr << "Series not configured or missing weather params: " << compare_series << "\n";
+            std::cerr << "Add to ~/.config/predibloom/config.json\n";
+            return 1;
+        }
+
         predibloom::api::OpenMeteoClient openmeteo;
         predibloom::core::WeatherComparisonService comparison(client, openmeteo);
+        comparison.setLocation(series_config->latitude, series_config->longitude,
+                               series_config->isLowTemp());
 
         auto result = comparison.analyze(compare_series, compare_start, compare_end);
         if (!result.ok()) {
@@ -397,12 +409,12 @@ int main(int argc, char** argv) {
         int processed = 0;
         int total = markets_result.value().size();
         for (const auto& market : markets_result.value()) {
-            // Parse ticker to get date
-            auto ticker_info = predibloom::core::parseHighNYTicker(market.ticker);
-            if (!ticker_info.valid) continue;
+            // Parse date from event_ticker (works for any series)
+            std::string market_date = predibloom::core::parseDateFromEventTicker(market.event_ticker);
+            if (market_date.empty()) continue;
 
             // Filter by date range
-            if (ticker_info.date < history_start || ticker_info.date > history_end) continue;
+            if (market_date < history_start || market_date > history_end) continue;
 
             // Fetch all trades for this market
             auto trades_result = client.getAllTrades(market.ticker);
@@ -462,16 +474,35 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        // Parse date from event_ticker (generic approach, works for any series)
+        static const std::map<std::string, std::string> month_to_num_w = {
+            {"JAN", "01"}, {"FEB", "02"}, {"MAR", "03"}, {"APR", "04"},
+            {"MAY", "05"}, {"JUN", "06"}, {"JUL", "07"}, {"AUG", "08"},
+            {"SEP", "09"}, {"OCT", "10"}, {"NOV", "11"}, {"DEC", "12"}
+        };
+
+        bool is_low = series_config->isLowTemp();
+
         // Group markets by date and find winners (settled YES)
         std::map<std::string, predibloom::api::Market> winners;  // date -> winning market
         for (const auto& market : markets_result.value()) {
             if (market.result != "yes") continue;
 
-            auto ticker_info = predibloom::core::parseHighNYTicker(market.ticker);
-            if (!ticker_info.valid) continue;
-            if (ticker_info.date < winners_start || ticker_info.date > winners_end) continue;
+            std::string et = market.event_ticker;
+            size_t dash = et.rfind('-');
+            if (dash == std::string::npos || dash + 7 > et.size()) continue;
 
-            winners[ticker_info.date] = market;
+            std::string yy = et.substr(dash + 1, 2);
+            std::string mmm = et.substr(dash + 3, 3);
+            std::string dd = et.substr(dash + 6, 2);
+
+            auto it = month_to_num_w.find(mmm);
+            if (it == month_to_num_w.end()) continue;
+
+            std::string date = "20" + yy + "-" + it->second + "-" + dd;
+            if (date < winners_start || date > winners_end) continue;
+
+            winners[date] = market;
         }
 
         std::cerr << "Found " << winners.size() << " winning brackets\n";
@@ -489,39 +520,43 @@ int main(int argc, char** argv) {
         // Fetch actual temperatures from NWS CLI (authoritative for Kalshi settlement)
         int start_year = std::stoi(winners_start.substr(0, 4));
         int end_year = std::stoi(winners_end.substr(0, 4));
-        std::map<std::string, int> nws_highs;  // date -> NWS high temp
+        std::map<std::string, int> nws_temps;
 
         for (int year = start_year; year <= end_year; year++) {
             auto nws_result = nws.getCliData(series_config->nws_station, year);
             if (nws_result.ok()) {
                 for (const auto& obs : nws_result.value()) {
                     if (obs.date >= winners_start && obs.date <= winners_end) {
-                        nws_highs[obs.date] = obs.high;
+                        nws_temps[obs.date] = is_low ? obs.low : obs.high;
                     }
                 }
             }
         }
 
-        std::cerr << "Fetched " << nws_highs.size() << " NWS observations\n";
+        std::cerr << "Fetched " << nws_temps.size() << " NWS observations\n";
 
         // Output CSV header
-        std::cout << "timestamp,date,ticker,strike,price_cents,forecast_high,openmeteo_actual,nws_high\n";
+        std::cout << "timestamp,date,ticker,strike,price_cents,forecast_temp,openmeteo_actual,nws_temp\n";
 
         int processed = 0;
         for (const auto& [date, market] : winners) {
             // Get forecast and actuals
-            std::optional<double> forecast_high;
+            std::optional<double> forecast_temp;
             std::optional<double> openmeteo_actual;
-            std::optional<int> nws_high;
+            std::optional<int> nws_temp;
 
             if (forecast_result.ok()) {
-                forecast_high = predibloom::api::getTemperatureForDate(forecast_result.value(), date);
+                forecast_temp = is_low
+                    ? predibloom::api::getMinTemperatureForDate(forecast_result.value(), date)
+                    : predibloom::api::getTemperatureForDate(forecast_result.value(), date);
             }
             if (openmeteo_actual_result.ok()) {
-                openmeteo_actual = predibloom::api::getTemperatureForDate(openmeteo_actual_result.value(), date);
+                openmeteo_actual = is_low
+                    ? predibloom::api::getMinTemperatureForDate(openmeteo_actual_result.value(), date)
+                    : predibloom::api::getTemperatureForDate(openmeteo_actual_result.value(), date);
             }
-            if (nws_highs.count(date)) {
-                nws_high = nws_highs.at(date);
+            if (nws_temps.count(date)) {
+                nws_temp = nws_temps.at(date);
             }
 
             // Format strike
@@ -551,8 +586,8 @@ int main(int argc, char** argv) {
             // Output each hour
             for (const auto& [hour, price] : hourly_prices) {
                 std::cout << hour << "," << date << "," << market.ticker << "," << strike << "," << price;
-                if (forecast_high) {
-                    std::cout << "," << std::fixed << std::setprecision(1) << *forecast_high;
+                if (forecast_temp) {
+                    std::cout << "," << std::fixed << std::setprecision(1) << *forecast_temp;
                 } else {
                     std::cout << ",";
                 }
@@ -561,8 +596,8 @@ int main(int argc, char** argv) {
                 } else {
                     std::cout << ",";
                 }
-                if (nws_high) {
-                    std::cout << "," << *nws_high;
+                if (nws_temp) {
+                    std::cout << "," << *nws_temp;
                 } else {
                     std::cout << ",";
                 }
@@ -618,11 +653,15 @@ int main(int argc, char** argv) {
         std::cerr << "  Offset: per-series from config\n";
         std::cerr << "  Margin: " << backtest_margin << "°F (min distance from bracket edge)\n";
         std::cerr << "  Price range: " << backtest_min_price << "¢ - " << backtest_max_price << "¢\n";
-        int pt_hour = (backtest_entry_hour - 7 + 24) % 24;  // UTC to PT (PDT)
-        std::string pt_ampm = (pt_hour >= 12) ? "pm" : "am";
-        int pt_hour_12 = (pt_hour % 12 == 0) ? 12 : (pt_hour % 12);
-        std::string day_note = (backtest_entry_hour < 7) ? " (previous day)" : "";
-        std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC = " << pt_hour_12 << pt_ampm << " PT" << day_note << "\n";
+        if (backtest_entry_hour >= 0) {
+            int pt_hour = (backtest_entry_hour - 7 + 24) % 24;  // UTC to PT (PDT)
+            std::string pt_ampm = (pt_hour >= 12) ? "pm" : "am";
+            int pt_hour_12 = (pt_hour % 12 == 0) ? 12 : (pt_hour % 12);
+            std::string day_note = (backtest_entry_hour < 7) ? " (previous day)" : "";
+            std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC = " << pt_hour_12 << pt_ampm << " PT" << day_note << "\n";
+        } else {
+            std::cerr << "  Entry: per-series from config (high=5 UTC/9pm PT, low=17 UTC/9am PT)\n";
+        }
         if (backtest_exit_hour >= 0) {
             int exit_pt = (backtest_exit_hour - 7 + 24) % 24;
             std::string exit_ampm = (exit_pt >= 12) ? "pm" : "am";
@@ -692,33 +731,15 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        // Group markets by date (parse from event_ticker like KXHIGHNY-26APR10)
+        // Group markets by date
         std::map<std::string, std::vector<predibloom::api::Market>> markets_by_date;
-        static const std::map<std::string, std::string> month_to_num = {
-            {"JAN", "01"}, {"FEB", "02"}, {"MAR", "03"}, {"APR", "04"},
-            {"MAY", "05"}, {"JUN", "06"}, {"JUL", "07"}, {"AUG", "08"},
-            {"SEP", "09"}, {"OCT", "10"}, {"NOV", "11"}, {"DEC", "12"}
-        };
 
         for (const auto& market : markets_result.value()) {
             // Settled markets have status "finalized" and a result
             if (market.result.empty()) continue;
 
-            // Parse date from event_ticker (e.g., KXHIGHNY-26APR10)
-            std::string et = market.event_ticker;
-            if (et.size() < 15) continue;  // KXHIGHNY-YYMMMDD = 15 chars min
-
-            size_t dash = et.rfind('-');
-            if (dash == std::string::npos || dash + 7 > et.size()) continue;
-
-            std::string yy = et.substr(dash + 1, 2);
-            std::string mmm = et.substr(dash + 3, 3);
-            std::string dd = et.substr(dash + 6, 2);
-
-            auto it = month_to_num.find(mmm);
-            if (it == month_to_num.end()) continue;
-
-            std::string date = "20" + yy + "-" + it->second + "-" + dd;
+            std::string date = predibloom::core::parseDateFromEventTicker(market.event_ticker);
+            if (date.empty()) continue;
             if (date < backtest_start || date > backtest_end) continue;
 
             markets_by_date[date].push_back(market);
@@ -737,16 +758,17 @@ int main(int argc, char** argv) {
             }
 
             // Fetch NWS actual data
+            bool is_low = series_config->isLowTemp();
             int start_year = std::stoi(backtest_start.substr(0, 4));
             int end_year = std::stoi(backtest_end.substr(0, 4));
-            std::map<std::string, int> nws_highs;
+            std::map<std::string, int> nws_temps;
 
             for (int year = start_year; year <= end_year; year++) {
                 auto nws_result = nws.getCliData(series_config->nws_station, year);
                 if (nws_result.ok()) {
                     for (const auto& obs : nws_result.value()) {
                         if (obs.date >= backtest_start && obs.date <= backtest_end) {
-                            nws_highs[obs.date] = obs.high;
+                            nws_temps[obs.date] = is_low ? obs.low : obs.high;
                         }
                     }
                 } else {
@@ -755,7 +777,7 @@ int main(int argc, char** argv) {
                 }
             }
 
-            if (nws_highs.empty()) {
+            if (nws_temps.empty()) {
                 std::cerr << "ERROR: No NWS data for " << series_config->nws_station
                           << " in range " << backtest_start << " to " << backtest_end << "\n";
                 std::cerr << "  All " << markets_by_date.size() << " trading days will be skipped\n";
@@ -766,7 +788,9 @@ int main(int argc, char** argv) {
         // Process each day
         for (const auto& [date, day_markets] : markets_by_date) {
             // Get forecast for this date
-            auto forecast_opt = predibloom::api::getTemperatureForDate(forecast_result.value(), date);
+            auto forecast_opt = is_low
+                ? predibloom::api::getMinTemperatureForDate(forecast_result.value(), date)
+                : predibloom::api::getTemperatureForDate(forecast_result.value(), date);
             if (!forecast_opt) {
                 skip.no_forecast++;
                 continue;
@@ -776,11 +800,11 @@ int main(int argc, char** argv) {
             double adjusted = forecast + series_config->offset;
 
             // Get NWS actual
-            if (nws_highs.find(date) == nws_highs.end()) {
+            if (nws_temps.find(date) == nws_temps.end()) {
                 skip.no_nws_data++;
                 continue;
             }
-            int nws_actual = nws_highs.at(date);
+            int nws_actual = nws_temps.at(date);
 
             // Parse brackets and find target
             std::vector<Bracket> brackets;
@@ -820,8 +844,10 @@ int main(int argc, char** argv) {
             }
 
             // Build target hour prefix: "YYYY-MM-DDTHH"
+            int effective_entry_hour = (backtest_entry_hour >= 0)
+                ? backtest_entry_hour : series_config->effectiveEntryHour();
             char hour_buf[3];
-            snprintf(hour_buf, sizeof(hour_buf), "%02d", backtest_entry_hour);
+            snprintf(hour_buf, sizeof(hour_buf), "%02d", effective_entry_hour);
             std::string target_hour = date + "T" + hour_buf;
 
             // Find the most recent trade at or before the target hour
@@ -942,12 +968,15 @@ int main(int argc, char** argv) {
         std::cout << std::setw(6) << "Ctrs"
                   << std::setw(7) << "Result"
                   << std::setw(10) << "P&L"
+                  << std::setw(10) << "Balance"
                   << "\n";
 
-        int line_width = 63 + (show_series ? 12 : 0) + (show_exit ? 7 : 0);
+        int line_width = 73 + (show_series ? 12 : 0) + (show_exit ? 7 : 0);
         std::cout << std::string(line_width, '-') << "\n";
 
+        double running_balance = 0;
         for (const auto& t : trades) {
+            running_balance += t.pnl;
             if (show_series) {
                 std::cout << std::left << std::setw(12) << t.series;
             }
@@ -958,9 +987,13 @@ int main(int argc, char** argv) {
             if (show_exit) {
                 std::cout << std::setw(7) << (std::to_string(static_cast<int>(t.exit_price)) + "c");
             }
+            char pnl_buf[16], bal_buf[16];
+            snprintf(pnl_buf, sizeof(pnl_buf), "%+.2f", t.pnl);
+            snprintf(bal_buf, sizeof(bal_buf), "%+.0f", running_balance);
             std::cout << std::setw(6) << t.contracts
                       << std::setw(7) << (t.won ? "WIN" : "LOSS")
-                      << std::showpos << std::fixed << std::setprecision(2) << "$" << t.pnl << std::noshowpos
+                      << std::left << std::setw(12) << (std::string("$") + pnl_buf)
+                      << "$" << bal_buf
                       << "\n";
         }
 
@@ -1103,7 +1136,9 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            auto forecast_opt = predibloom::api::getTemperatureForDate(forecast_result.value(), predict_date);
+            auto forecast_opt = series_config->isLowTemp()
+                ? predibloom::api::getMinTemperatureForDate(forecast_result.value(), predict_date)
+                : predibloom::api::getTemperatureForDate(forecast_result.value(), predict_date);
             if (!forecast_opt) {
                 std::cerr << "  " << series_config->label << ": no forecast data\n";
                 continue;
@@ -1165,7 +1200,7 @@ int main(int argc, char** argv) {
                 p.margin = margin_from_edge;
                 p.bid = target->market->yes_bid_cents();
                 p.ask = target->market->yes_ask_cents();
-                p.tradeable = (margin_from_edge >= predict_margin);
+                p.tradeable = (margin_from_edge >= predict_margin) && (p.ask <= predict_max_price);
             } else {
                 p.strike = "---";
                 p.ticker = "";
@@ -1216,6 +1251,8 @@ int main(int argc, char** argv) {
                 if (p.tradeable) {
                     std::cout << "BUY";
                     tradeable_count++;
+                } else if (p.margin >= predict_margin && p.ask > predict_max_price) {
+                    std::cout << "EXPENSIVE";
                 } else {
                     std::cout << "-";
                 }
@@ -1225,13 +1262,14 @@ int main(int argc, char** argv) {
 
         std::cout << std::string(78, '-') << "\n";
         std::cout << "Tradeable signals: " << tradeable_count << "/" << predictions.size()
-                  << " (margin >= " << predict_margin << "°F)\n";
+                  << " (margin >= " << predict_margin << "°F, ask <= " << (int)predict_max_price << "¢)\n";
 
         if (tradeable_count > 0) {
             std::cout << "\nTickers to buy:\n";
             for (const auto& p : predictions) {
                 if (p.tradeable) {
-                    std::cout << "  " << p.ticker << " (" << p.label << " " << p.strike << " @ " << (int)p.ask << "¢)\n";
+                    std::cout << "  " << p.ticker << "  " << p.label << " " << p.strike
+                              << " @ " << (int)p.ask << "¢\n";
                 }
             }
         }
@@ -1295,16 +1333,17 @@ int main(int argc, char** argv) {
             }
 
             // Fetch NWS actual data
+            bool is_low = series_config->isLowTemp();
             int start_year = std::stoi(calibrate_start.substr(0, 4));
             int end_year = std::stoi(calibrate_end.substr(0, 4));
-            std::map<std::string, int> nws_highs;
+            std::map<std::string, int> nws_temps;
 
             for (int year = start_year; year <= end_year; year++) {
                 auto nws_result = nws.getCliData(series_config->nws_station, year);
                 if (nws_result.ok()) {
                     for (const auto& obs : nws_result.value()) {
                         if (obs.date >= calibrate_start && obs.date <= calibrate_end) {
-                            nws_highs[obs.date] = obs.high;
+                            nws_temps[obs.date] = is_low ? obs.low : obs.high;
                         }
                     }
                 } else {
@@ -1313,7 +1352,7 @@ int main(int argc, char** argv) {
                 }
             }
 
-            if (nws_highs.empty()) {
+            if (nws_temps.empty()) {
                 std::cerr << "  ERROR: No NWS data available, skipping\n";
                 continue;
             }
@@ -1328,7 +1367,9 @@ int main(int argc, char** argv) {
             std::vector<DayComparison> days;
 
             const auto& times = forecast_result.value().daily.time;
-            const auto& temps = forecast_result.value().daily.temperature_2m_max;
+            const auto& temps = is_low
+                ? forecast_result.value().daily.temperature_2m_min
+                : forecast_result.value().daily.temperature_2m_max;
 
             for (size_t i = 0; i < times.size() && i < temps.size(); i++) {
                 const std::string& date = times[i];
@@ -1337,8 +1378,8 @@ int main(int argc, char** argv) {
                 if (std::isnan(forecast_temp)) continue;
                 if (date < calibrate_start || date > calibrate_end) continue;
 
-                auto nws_it = nws_highs.find(date);
-                if (nws_it == nws_highs.end()) continue;
+                auto nws_it = nws_temps.find(date);
+                if (nws_it == nws_temps.end()) continue;
 
                 DayComparison d;
                 d.date = date;

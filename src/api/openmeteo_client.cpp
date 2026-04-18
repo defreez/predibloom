@@ -69,7 +69,7 @@ Result<WeatherResponse> OpenMeteoClient::fetchWeather(
             << "&longitude=" << longitude
             << "&start_date=" << start_date
             << "&end_date=" << end_date
-            << "&daily=temperature_2m_max"
+            << "&daily=temperature_2m_max,temperature_2m_min"
             << "&temperature_unit=fahrenheit"
             << "&timezone=America/New_York";
     std::string path = path_ss.str();

@@ -15,7 +15,8 @@
           "latitude": 40.7128,
           "longitude": -74.0060,
           "nws_station": "KNYC",
-          "offset": 0.5
+          "offset": 0.5,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHLAX",
@@ -23,7 +24,8 @@
           "latitude": 33.9425,
           "longitude": -118.4081,
           "nws_station": "KLAX",
-          "offset": 0.4
+          "offset": 0.4,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHCHI",
@@ -31,7 +33,8 @@
           "latitude": 41.8781,
           "longitude": -87.6298,
           "nws_station": "KORD",
-          "offset": 2.3
+          "offset": 2.3,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHAUS",
@@ -39,7 +42,8 @@
           "latitude": 30.2672,
           "longitude": -97.7431,
           "nws_station": "KAUS",
-          "offset": 1.1
+          "offset": 1.1,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTSEA",
@@ -47,7 +51,8 @@
           "latitude": 47.6062,
           "longitude": -122.3321,
           "nws_station": "KSEA",
-          "offset": 1.2
+          "offset": 1.2,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTPHX",
@@ -55,7 +60,8 @@
           "latitude": 33.4484,
           "longitude": -112.0740,
           "nws_station": "KPHX",
-          "offset": 1.2
+          "offset": 1.2,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHDEN",
@@ -63,7 +69,8 @@
           "latitude": 39.7392,
           "longitude": -104.9903,
           "nws_station": "KDEN",
-          "offset": -2.3
+          "offset": -2.3,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTLV",
@@ -71,7 +78,8 @@
           "latitude": 36.1699,
           "longitude": -115.1398,
           "nws_station": "KLAS",
-          "offset": -0.3
+          "offset": -0.3,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTMIN",
@@ -79,7 +87,8 @@
           "latitude": 44.9778,
           "longitude": -93.2650,
           "nws_station": "KMSP",
-          "offset": 0.0
+          "offset": 0.0,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTDC",
@@ -87,7 +96,8 @@
           "latitude": 38.9072,
           "longitude": -77.0369,
           "nws_station": "KDCA",
-          "offset": 0.2
+          "offset": 0.2,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTSFO",
@@ -95,7 +105,8 @@
           "latitude": 37.7749,
           "longitude": -122.4194,
           "nws_station": "KSFO",
-          "offset": -0.4
+          "offset": -0.4,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTDAL",
@@ -103,7 +114,8 @@
           "latitude": 32.7767,
           "longitude": -96.7970,
           "nws_station": "KDFW",
-          "offset": 0.1
+          "offset": 0.1,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHMIA",
@@ -111,7 +123,8 @@
           "latitude": 25.7617,
           "longitude": -80.1918,
           "nws_station": "KMIA",
-          "offset": 2.4
+          "offset": 2.4,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTSATX",
@@ -119,7 +132,8 @@
           "latitude": 29.4241,
           "longitude": -98.4936,
           "nws_station": "KSAT",
-          "offset": -0.8
+          "offset": -0.8,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTBOS",
@@ -127,7 +141,8 @@
           "latitude": 42.3601,
           "longitude": -71.0589,
           "nws_station": "KBOS",
-          "offset": 0.2
+          "offset": 0.2,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTATL",
@@ -135,7 +150,8 @@
           "latitude": 33.7490,
           "longitude": -84.3880,
           "nws_station": "KATL",
-          "offset": 1.5
+          "offset": 1.5,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHPHIL",
@@ -143,7 +159,8 @@
           "latitude": 39.9526,
           "longitude": -75.1652,
           "nws_station": "KPHL",
-          "offset": 1.6
+          "offset": 1.6,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTOKC",
@@ -151,7 +168,8 @@
           "latitude": 35.4676,
           "longitude": -97.5164,
           "nws_station": "KOKC",
-          "offset": -0.6
+          "offset": -0.6,
+          "entry_hour": 4
         },
         {
           "series_ticker": "KXHIGHTHOU",
@@ -159,7 +177,184 @@
           "latitude": 29.7604,
           "longitude": -95.3698,
           "nws_station": "KIAH",
-          "offset": 3.4
+          "offset": 3.4,
+          "entry_hour": 4
+        }
+      ]
+    },
+    {
+      "name": "Low Temps",
+      "series": [
+        {
+          "series_ticker": "KXLOWTNYC",
+          "label": "NYC Low",
+          "latitude": 40.7128,
+          "longitude": -74.0060,
+          "nws_station": "KNYC",
+          "offset": 1.5,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTLAX",
+          "label": "LA Low",
+          "latitude": 33.9425,
+          "longitude": -118.4081,
+          "nws_station": "KLAX",
+          "offset": 1.1,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTCHI",
+          "label": "Chicago Low",
+          "latitude": 41.8781,
+          "longitude": -87.6298,
+          "nws_station": "KORD",
+          "offset": -0.2,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTAUS",
+          "label": "Austin Low",
+          "latitude": 30.2672,
+          "longitude": -97.7431,
+          "nws_station": "KAUS",
+          "offset": -4.5,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTSEA",
+          "label": "Seattle Low",
+          "latitude": 47.6062,
+          "longitude": -122.3321,
+          "nws_station": "KSEA",
+          "offset": 0.2,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTPHX",
+          "label": "Phoenix Low",
+          "latitude": 33.4484,
+          "longitude": -112.0740,
+          "nws_station": "KPHX",
+          "offset": 0.4,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTDEN",
+          "label": "Denver Low",
+          "latitude": 39.7392,
+          "longitude": -104.9903,
+          "nws_station": "KDEN",
+          "offset": -4.6,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTLV",
+          "label": "Las Vegas Low",
+          "latitude": 36.1699,
+          "longitude": -115.1398,
+          "nws_station": "KLAS",
+          "offset": 2.0,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTMIN",
+          "label": "Minneapolis Low",
+          "latitude": 44.9778,
+          "longitude": -93.2650,
+          "nws_station": "KMSP",
+          "offset": -0.4,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTDC",
+          "label": "DC Low",
+          "latitude": 38.9072,
+          "longitude": -77.0369,
+          "nws_station": "KDCA",
+          "offset": 0.7,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTSFO",
+          "label": "SF Low",
+          "latitude": 37.7749,
+          "longitude": -122.4194,
+          "nws_station": "KSFO",
+          "offset": 1.0,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTDAL",
+          "label": "Dallas Low",
+          "latitude": 32.7767,
+          "longitude": -96.7970,
+          "nws_station": "KDFW",
+          "offset": -1.8,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTMIA",
+          "label": "Miami Low",
+          "latitude": 25.7617,
+          "longitude": -80.1918,
+          "nws_station": "KMIA",
+          "offset": 1.0,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTSATX",
+          "label": "San Antonio Low",
+          "latitude": 29.4241,
+          "longitude": -98.4936,
+          "nws_station": "KSAT",
+          "offset": -1.6,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTBOS",
+          "label": "Boston Low",
+          "latitude": 42.3601,
+          "longitude": -71.0589,
+          "nws_station": "KBOS",
+          "offset": 2.3,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTATL",
+          "label": "Atlanta Low",
+          "latitude": 33.7490,
+          "longitude": -84.3880,
+          "nws_station": "KATL",
+          "offset": 1.0,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTPHIL",
+          "label": "Philly Low",
+          "latitude": 39.9526,
+          "longitude": -75.1652,
+          "nws_station": "KPHL",
+          "offset": 1.0,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTOKC",
+          "label": "OKC Low",
+          "latitude": 35.4676,
+          "longitude": -97.5164,
+          "nws_station": "KOKC",
+          "offset": -3.3,
+          "entry_hour": 4
+        },
+        {
+          "series_ticker": "KXLOWTHOU",
+          "label": "Houston Low",
+          "latitude": 29.7604,
+          "longitude": -95.3698,
+          "nws_station": "KIAH",
+          "offset": -1.6,
+          "entry_hour": 4
         }
       ]
     }

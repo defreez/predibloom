@@ -43,6 +43,9 @@ Config Config::load() {
                         if (series_json.contains("offset")) {
                             ts.offset = series_json["offset"];
                         }
+                        if (series_json.contains("entry_hour")) {
+                            ts.entry_hour = series_json["entry_hour"];
+                        }
                         tab.series.push_back(ts);
                     }
                     config.tabs.push_back(tab);
