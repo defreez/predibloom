@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iomanip>
 #include <map>
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -243,6 +244,7 @@ int main(int argc, char** argv) {
     double backtest_max_price = 40.0;  // Only buy if price is below this (cents)
     double backtest_trade_size = 0.0;  // Dollars per trade (0 = use 10x margin)
     int backtest_entry_hour = 5;       // 5am UTC = 9pm PST previous day
+    int backtest_exit_hour = -1;       // -1 = hold to settlement
 
     backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (default: all configured)")
         ->delimiter(',');
@@ -261,6 +263,9 @@ int main(int argc, char** argv) {
     backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Hour UTC on settlement day (5 = 9pm PST night before)")
         ->default_val(5)
         ->check(CLI::Range(0, 23));
+    backtest_cmd->add_option("--exit-hour", backtest_exit_hour, "Hour UTC to exit (-1 = hold to settlement)")
+        ->default_val(-1)
+        ->check(CLI::Range(-1, 23));
 
     // Predict command options
     std::string predict_series;
@@ -618,7 +623,15 @@ int main(int argc, char** argv) {
         int pt_hour_12 = (pt_hour % 12 == 0) ? 12 : (pt_hour % 12);
         std::string day_note = (backtest_entry_hour < 7) ? " (previous day)" : "";
         std::cerr << "  Entry: " << backtest_entry_hour << ":00 UTC = " << pt_hour_12 << pt_ampm << " PT" << day_note << "\n";
-        std::cerr << "  Exit: hold to settlement\n";
+        if (backtest_exit_hour >= 0) {
+            int exit_pt = (backtest_exit_hour - 7 + 24) % 24;
+            std::string exit_ampm = (exit_pt >= 12) ? "pm" : "am";
+            int exit_12 = (exit_pt % 12 == 0) ? 12 : (exit_pt % 12);
+            std::string exit_day_note = (backtest_exit_hour < 7) ? " (previous day)" : "";
+            std::cerr << "  Exit: " << backtest_exit_hour << ":00 UTC = " << exit_12 << exit_ampm << " PT" << exit_day_note << "\n";
+        } else {
+            std::cerr << "  Exit: hold to settlement\n";
+        }
         if (backtest_trade_size > 0) {
             std::cerr << "  Trade size: $" << backtest_trade_size << " per trade\n\n";
         } else {
@@ -635,6 +648,7 @@ int main(int argc, char** argv) {
             double adjusted;
             std::string entry_time;
             double entry_price;   // cents per contract
+            double exit_price;    // cents per contract (-1 = settlement)
             int contracts;        // number of contracts
             int nws_actual;
             bool won;
@@ -656,9 +670,10 @@ int main(int argc, char** argv) {
             int price_too_high = 0;
             int price_too_low = 0;
             int trade_fetch_error = 0;
+            int no_trades_at_exit = 0;
             int total() const {
                 return no_forecast + no_nws_data + between_brackets +
-                       margin_too_small + no_trades_at_entry +
+                       margin_too_small + no_trades_at_entry + no_trades_at_exit +
                        price_too_high + price_too_low + trade_fetch_error;
             }
         } skip;
@@ -843,11 +858,40 @@ int main(int argc, char** argv) {
             // Determine if bracket is bounded (has both floor and cap)
             bool is_bounded = target->floor.has_value() && target->cap.has_value();
 
-            // Determine if we won (for settlement-based P&L)
-            bool won = (target_market->result == "yes");
+            // Determine exit price
+            double exit_price = -1;
+            bool won;
+            double pnl;
 
-            // Calculate P&L - hold to settlement
-            double pnl = won ? (100 - entry_price) : (-entry_price);
+            if (backtest_exit_hour >= 0) {
+                // Find trade price at exit hour
+                char exit_buf[3];
+                snprintf(exit_buf, sizeof(exit_buf), "%02d", backtest_exit_hour);
+                std::string exit_target_hour = date + "T" + exit_buf;
+
+                std::string exit_time;
+                for (const auto& trade : trades_result.value()) {
+                    std::string trade_hour = trade.created_time.substr(0, 13);
+                    if (trade_hour <= exit_target_hour) {
+                        if (exit_time.empty() || trade_hour > exit_time) {
+                            exit_price = trade.yes_price_cents();
+                            exit_time = trade_hour;
+                        }
+                    }
+                }
+
+                if (exit_price < 0) {
+                    skip.no_trades_at_exit++;
+                    continue;
+                }
+
+                pnl = exit_price - entry_price;
+                won = (pnl > 0);
+            } else {
+                // Hold to settlement
+                won = (target_market->result == "yes");
+                pnl = won ? (100 - entry_price) : (-entry_price);
+            }
 
             // Calculate trade size: fixed or 10x margin
             double trade_size = (backtest_trade_size > 0) ? backtest_trade_size : (10.0 * margin_from_edge);
@@ -863,7 +907,7 @@ int main(int argc, char** argv) {
             // Use parsed strike string
             std::string strike = target->displayString();
 
-            Trade t{current_series, date, target_market->ticker, strike, forecast, adjusted, entry_time, entry_price, contracts, nws_actual, won, is_bounded, pnl_dollars};
+            Trade t{current_series, date, target_market->ticker, strike, forecast, adjusted, entry_time, entry_price, exit_price, contracts, nws_actual, won, is_bounded, pnl_dollars};
             trades.push_back(t);
 
             total_pnl_dollars += pnl_dollars;
@@ -872,10 +916,18 @@ int main(int argc, char** argv) {
         }
         } // end series loop
 
+        // Sort by date, then series
+        std::sort(trades.begin(), trades.end(), [](const Trade& a, const Trade& b) {
+            if (a.date != b.date) return a.date < b.date;
+            return a.series < b.series;
+        });
+
         // Output results
         std::cout << "\n=== BACKTEST RESULTS ===\n\n";
 
         bool show_series = (backtest_series.size() > 1);
+
+        bool show_exit = (backtest_exit_hour >= 0);
 
         if (show_series) {
             std::cout << std::left << std::setw(12) << "Series";
@@ -883,13 +935,16 @@ int main(int argc, char** argv) {
         std::cout << std::left << std::setw(12) << "Date"
                   << std::setw(10) << "Strike"
                   << std::setw(6) << "NWS"
-                  << std::setw(7) << "Entry"
-                  << std::setw(6) << "Ctrs"
+                  << std::setw(7) << "Entry";
+        if (show_exit) {
+            std::cout << std::setw(7) << "Exit";
+        }
+        std::cout << std::setw(6) << "Ctrs"
                   << std::setw(7) << "Result"
                   << std::setw(10) << "P&L"
                   << "\n";
 
-        int line_width = 63 + (show_series ? 12 : 0);
+        int line_width = 63 + (show_series ? 12 : 0) + (show_exit ? 7 : 0);
         std::cout << std::string(line_width, '-') << "\n";
 
         for (const auto& t : trades) {
@@ -899,8 +954,11 @@ int main(int argc, char** argv) {
             std::cout << std::left << std::setw(12) << t.date
                       << std::setw(10) << t.strike
                       << std::setw(6) << t.nws_actual
-                      << std::setw(7) << (std::to_string(static_cast<int>(t.entry_price)) + "c")
-                      << std::setw(6) << t.contracts
+                      << std::setw(7) << (std::to_string(static_cast<int>(t.entry_price)) + "c");
+            if (show_exit) {
+                std::cout << std::setw(7) << (std::to_string(static_cast<int>(t.exit_price)) + "c");
+            }
+            std::cout << std::setw(6) << t.contracts
                       << std::setw(7) << (t.won ? "WIN" : "LOSS")
                       << std::showpos << std::fixed << std::setprecision(2) << "$" << t.pnl << std::noshowpos
                       << "\n";
@@ -959,6 +1017,8 @@ int main(int argc, char** argv) {
                 std::cout << "    margin too small:   " << skip.margin_too_small << "\n";
             if (skip.no_trades_at_entry > 0)
                 std::cout << "    no trades at entry: " << skip.no_trades_at_entry << "\n";
+            if (skip.no_trades_at_exit > 0)
+                std::cout << "    no trades at exit:  " << skip.no_trades_at_exit << "\n";
             if (skip.price_too_high > 0)
                 std::cout << "    price too high:     " << skip.price_too_high << "\n";
             if (skip.price_too_low > 0)
