@@ -88,6 +88,78 @@
           "longitude": -77.0369,
           "nws_station": "KDCA",
           "offset": 0.2
+        },
+        {
+          "series_ticker": "KXHIGHTSFO",
+          "label": "SF High",
+          "latitude": 37.7749,
+          "longitude": -122.4194,
+          "nws_station": "KSFO",
+          "offset": -0.4
+        },
+        {
+          "series_ticker": "KXHIGHTDAL",
+          "label": "Dallas High",
+          "latitude": 32.7767,
+          "longitude": -96.7970,
+          "nws_station": "KDFW",
+          "offset": 0.1
+        },
+        {
+          "series_ticker": "KXHIGHMIA",
+          "label": "Miami High",
+          "latitude": 25.7617,
+          "longitude": -80.1918,
+          "nws_station": "KMIA",
+          "offset": 2.4
+        },
+        {
+          "series_ticker": "KXHIGHTSATX",
+          "label": "San Antonio High",
+          "latitude": 29.4241,
+          "longitude": -98.4936,
+          "nws_station": "KSAT",
+          "offset": -0.8
+        },
+        {
+          "series_ticker": "KXHIGHTBOS",
+          "label": "Boston High",
+          "latitude": 42.3601,
+          "longitude": -71.0589,
+          "nws_station": "KBOS",
+          "offset": 0.2
+        },
+        {
+          "series_ticker": "KXHIGHTATL",
+          "label": "Atlanta High",
+          "latitude": 33.7490,
+          "longitude": -84.3880,
+          "nws_station": "KATL",
+          "offset": 1.5
+        },
+        {
+          "series_ticker": "KXHIGHPHIL",
+          "label": "Philly High",
+          "latitude": 39.9526,
+          "longitude": -75.1652,
+          "nws_station": "KPHL",
+          "offset": 1.6
+        },
+        {
+          "series_ticker": "KXHIGHTOKC",
+          "label": "OKC High",
+          "latitude": 35.4676,
+          "longitude": -97.5164,
+          "nws_station": "KOKC",
+          "offset": -0.6
+        },
+        {
+          "series_ticker": "KXHIGHTHOU",
+          "label": "Houston High",
+          "latitude": 29.7604,
+          "longitude": -95.3698,
+          "nws_station": "KIAH",
+          "offset": 3.4
         }
       ]
     }
