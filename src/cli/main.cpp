@@ -144,6 +144,11 @@ int main(int argc, char** argv) {
     auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset by comparing Open-Meteo vs NWS actuals");
     auto* fills_cmd = app.add_subcommand("fills", "Show your trade fills (requires auth)");
     auto* portfolio_cmd = app.add_subcommand("portfolio", "Show current positions and balance (requires auth)");
+    auto* portfolio_positions_cmd = portfolio_cmd->add_subcommand("positions", "Show open positions");
+    auto* portfolio_settlements_cmd = portfolio_cmd->add_subcommand("settlements", "Show recent settlements");
+    int portfolio_settle_days = 7;
+    portfolio_settlements_cmd->add_option("-d,--days", portfolio_settle_days, "Number of days to look back")
+        ->default_val(7);
 
     // Markets command options
     std::string markets_status = "open";
@@ -1000,6 +1005,7 @@ int main(int argc, char** argv) {
         std::cout << std::left << std::setw(12) << "Date"
                   << std::setw(10) << "Strike"
                   << std::setw(6) << "NWS"
+                  << std::setw(9) << "EntryT"
                   << std::setw(7) << "Entry";
         if (show_exit) {
             std::cout << std::setw(7) << "Exit";
@@ -1010,7 +1016,7 @@ int main(int argc, char** argv) {
                   << std::setw(10) << "Balance"
                   << "\n";
 
-        int line_width = 73 + (show_series ? 12 : 0) + (show_exit ? 7 : 0);
+        int line_width = 82 + (show_series ? 12 : 0) + (show_exit ? 7 : 0);
         std::cout << std::string(line_width, '-') << "\n";
 
         double running_balance = 0;
@@ -1019,9 +1025,21 @@ int main(int argc, char** argv) {
             if (show_series) {
                 std::cout << std::left << std::setw(12) << t.series;
             }
+
+            // Convert entry time to PT for display (e.g., "2026-02-17T05" -> "9pm")
+            std::string entry_pt_str = "-";
+            if (t.entry_time.size() >= 13) {
+                int utc_hour = std::stoi(t.entry_time.substr(11, 2));
+                int pt_hour = (utc_hour - 7 + 24) % 24;
+                int pt12 = (pt_hour % 12 == 0) ? 12 : (pt_hour % 12);
+                std::string ampm = (pt_hour >= 12) ? "pm" : "am";
+                entry_pt_str = std::to_string(pt12) + ampm;
+            }
+
             std::cout << std::left << std::setw(12) << t.date
                       << std::setw(10) << t.strike
                       << std::setw(6) << t.nws_actual
+                      << std::setw(9) << entry_pt_str
                       << std::setw(7) << (std::to_string(static_cast<int>(t.entry_price)) + "c");
             if (show_exit) {
                 std::cout << std::setw(7) << (std::to_string(static_cast<int>(t.exit_price)) + "c");
@@ -1643,7 +1661,7 @@ int main(int argc, char** argv) {
 
         client.setAuth(config.api_key_id, config.key_file);
 
-        // Fetch balance
+        // Fetch balance (needed for all subcommands)
         auto balance_result = client.getBalance();
         if (!balance_result.ok()) {
             std::cerr << "Error fetching balance: " << balance_result.error().message << "\n";
@@ -1651,82 +1669,74 @@ int main(int argc, char** argv) {
         }
         const auto& bal = balance_result.value();
 
-        char bal_buf[32], pv_buf[32], total_buf[32];
-        snprintf(bal_buf, sizeof(bal_buf), "$%.2f", bal.balance / 100.0);
-        snprintf(pv_buf, sizeof(pv_buf), "$%.2f", bal.portfolio_value / 100.0);
-        snprintf(total_buf, sizeof(total_buf), "$%.2f", (bal.balance + bal.portfolio_value) / 100.0);
-
-        std::cout << "\n=== PORTFOLIO ===\n\n";
-        std::cout << "Balance:   " << bal_buf << "\n";
-        std::cout << "Portfolio: " << pv_buf << "\n";
-        std::cout << "Total:     " << total_buf << "\n";
-
-        // Fetch positions
-        auto positions_result = client.getAllPositions();
-        if (!positions_result.ok()) {
-            std::cerr << "Error fetching positions: " << positions_result.error().message << "\n";
-            return 1;
-        }
-
-        // Filter to only positions with non-zero count
-        std::vector<predibloom::api::Position> open_positions;
-        for (const auto& p : positions_result.value()) {
-            if (p.position() != 0) {
-                open_positions.push_back(p);
+        if (*portfolio_positions_cmd) {
+            // portfolio positions — detailed position list
+            auto positions_result = client.getAllPositions();
+            if (!positions_result.ok()) {
+                std::cerr << "Error fetching positions: " << positions_result.error().message << "\n";
+                return 1;
             }
-        }
 
-        std::cout << "\n--- Open Positions ---\n";
-        if (open_positions.empty()) {
-            std::cout << "No open positions\n";
-        } else {
-            std::cout << std::left
-                      << std::setw(36) << "Ticker"
-                      << std::right
-                      << std::setw(5) << "Pos"
-                      << std::setw(10) << "Exposure"
-                      << std::setw(10) << "Realized"
-                      << std::setw(10) << "Fees"
-                      << "\n";
-            std::cout << std::string(71, '-') << "\n";
-
-            for (const auto& p : open_positions) {
-                std::string ticker_display = p.ticker;
-                if (ticker_display.size() > 34) {
-                    ticker_display = ticker_display.substr(0, 34);
+            std::vector<predibloom::api::Position> open_positions;
+            for (const auto& p : positions_result.value()) {
+                if (p.position() != 0) {
+                    open_positions.push_back(p);
                 }
-
-                char exp_buf[16], pnl_buf[16], fee_buf[16];
-                snprintf(exp_buf, sizeof(exp_buf), "$%.2f", p.exposure_cents() / 100.0);
-                snprintf(pnl_buf, sizeof(pnl_buf), "$%.2f", p.realized_pnl_cents() / 100.0);
-                snprintf(fee_buf, sizeof(fee_buf), "$%.2f", p.fees_cents() / 100.0);
-
-                std::cout << std::left
-                          << std::setw(36) << ticker_display
-                          << std::right
-                          << std::setw(5) << p.position()
-                          << std::setw(10) << exp_buf
-                          << std::setw(10) << pnl_buf
-                          << std::setw(10) << fee_buf
-                          << "\n";
             }
-            std::cout << std::string(71, '-') << "\n";
-            std::cout << open_positions.size() << " positions\n";
-        }
 
-        // Fetch recent settlements (last 7 days)
-        predibloom::api::GetSettlementsParams settle_params;
-        auto now = std::time(nullptr);
-        settle_params.min_ts = now - 7 * 24 * 3600;
-        settle_params.limit = 100;
+            if (open_positions.empty()) {
+                std::cout << "No open positions\n";
+            } else {
+                std::cout << std::left
+                          << std::setw(36) << "Ticker"
+                          << std::right
+                          << std::setw(5) << "Pos"
+                          << std::setw(10) << "Exposure"
+                          << std::setw(10) << "Realized"
+                          << std::setw(10) << "Fees"
+                          << "\n";
+                std::cout << std::string(71, '-') << "\n";
 
-        auto settle_result = client.getSettlements(settle_params);
-        if (settle_result.ok()) {
+                for (const auto& p : open_positions) {
+                    std::string ticker_display = p.ticker;
+                    if (ticker_display.size() > 34) {
+                        ticker_display = ticker_display.substr(0, 34);
+                    }
+
+                    char exp_buf[16], pnl_buf[16], fee_buf[16];
+                    snprintf(exp_buf, sizeof(exp_buf), "$%.2f", p.exposure_cents() / 100.0);
+                    snprintf(pnl_buf, sizeof(pnl_buf), "$%.2f", p.realized_pnl_cents() / 100.0);
+                    snprintf(fee_buf, sizeof(fee_buf), "$%.2f", p.fees_cents() / 100.0);
+
+                    std::cout << std::left
+                              << std::setw(36) << ticker_display
+                              << std::right
+                              << std::setw(5) << p.position()
+                              << std::setw(10) << exp_buf
+                              << std::setw(10) << pnl_buf
+                              << std::setw(10) << fee_buf
+                              << "\n";
+                }
+                std::cout << std::string(71, '-') << "\n";
+                std::cout << open_positions.size() << " positions\n";
+            }
+
+        } else if (*portfolio_settlements_cmd) {
+            // portfolio settlements — recent settlements
+            predibloom::api::GetSettlementsParams settle_params;
+            auto now = std::time(nullptr);
+            settle_params.min_ts = now - portfolio_settle_days * 24 * 3600;
+            settle_params.limit = 100;
+
+            auto settle_result = client.getSettlements(settle_params);
+            if (!settle_result.ok()) {
+                std::cerr << "Error fetching settlements: " << settle_result.error().message << "\n";
+                return 1;
+            }
             const auto& settlements = settle_result.value().settlements;
 
-            std::cout << "\n--- Recent Settlements (7d) ---\n";
             if (settlements.empty()) {
-                std::cout << "No recent settlements\n";
+                std::cout << "No settlements in the last " << portfolio_settle_days << " days\n";
             } else {
                 std::cout << std::left
                           << std::setw(36) << "Ticker"
@@ -1764,6 +1774,12 @@ int main(int argc, char** argv) {
                 std::cout << std::string(54, '-') << "\n";
                 std::cout << settlements.size() << " settlements, total revenue: " << total_rev_buf << "\n";
             }
+
+        } else {
+            // Default: just show total
+            char total_buf[32];
+            snprintf(total_buf, sizeof(total_buf), "$%.2f", (bal.balance + bal.portfolio_value) / 100.0);
+            std::cout << total_buf << "\n";
         }
     }
 
