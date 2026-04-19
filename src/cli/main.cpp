@@ -1157,6 +1157,7 @@ int main(int argc, char** argv) {
             bool tradeable;
             bool between_brackets;  // forecast doesn't fall into any bracket
             bool within_window;     // current time is within entry window
+            std::string entry_pt;   // entry time in PT (e.g. "5pm")
         };
         std::vector<Prediction> predictions;
 
@@ -1255,6 +1256,13 @@ int main(int argc, char** argv) {
                 series_config->effectiveEntryHour());
             p.within_window = predibloom::core::isWithinEntryWindow(entry_dt, 3);
 
+            // Format entry time in PT
+            int utc = series_config->effectiveEntryHour();
+            int pt = (utc - 7 + 24) % 24;
+            int pt12 = (pt % 12 == 0) ? 12 : (pt % 12);
+            std::string ampm = (pt >= 12) ? "pm" : "am";
+            p.entry_pt = std::to_string(pt12) + ampm;
+
             predictions.push_back(p);
         }
 
@@ -1269,8 +1277,9 @@ int main(int argc, char** argv) {
                   << std::setw(8) << "Margin"
                   << std::setw(8) << "Bid"
                   << std::setw(8) << "Ask"
+                  << std::setw(8) << "Entry"
                   << "Signal\n";
-        std::cout << std::string(78, '-') << "\n";
+        std::cout << std::string(86, '-') << "\n";
 
         int tradeable_count = 0;
         for (const auto& p : predictions) {
@@ -1288,12 +1297,14 @@ int main(int argc, char** argv) {
                 std::cout << std::setw(8) << "---"
                           << std::setw(8) << "---"
                           << std::setw(8) << "---"
+                          << std::setw(8) << p.entry_pt
                           << "BETWEEN";
             } else {
                 snprintf(margin_buf, sizeof(margin_buf), "%.1f°F", p.margin);
                 std::cout << std::setw(8) << margin_buf
                           << std::setw(8) << (std::to_string((int)p.bid) + "¢")
-                          << std::setw(8) << (std::to_string((int)p.ask) + "¢");
+                          << std::setw(8) << (std::to_string((int)p.ask) + "¢")
+                          << std::setw(8) << p.entry_pt;
                 if (p.tradeable && p.within_window) {
                     std::cout << "BUY";
                     tradeable_count++;
@@ -1308,7 +1319,7 @@ int main(int argc, char** argv) {
             std::cout << "\n";
         }
 
-        std::cout << std::string(78, '-') << "\n";
+        std::cout << std::string(86, '-') << "\n";
         std::cout << "Tradeable signals: " << tradeable_count << "/" << predictions.size()
                   << " (margin >= " << predict_margin << "°F, ask <= " << (int)predict_max_price << "¢)\n";
 
