@@ -54,6 +54,7 @@ TEST(TrackedSeriesTest, DefaultValues) {
     TrackedSeries ts;
     EXPECT_DOUBLE_EQ(ts.offset, 2.0);
     EXPECT_EQ(ts.entry_hour, -1);
+    EXPECT_EQ(ts.entry_day_offset, 0);
     EXPECT_DOUBLE_EQ(ts.latitude, 0.0);
     EXPECT_DOUBLE_EQ(ts.longitude, 0.0);
 }
@@ -136,10 +137,12 @@ TEST(ConfigLoadTest, ValidFile) {
     EXPECT_EQ(nyc.nws_station, "KNYC");
     EXPECT_DOUBLE_EQ(nyc.offset, 2.5);
     EXPECT_EQ(nyc.entry_hour, 5);
+    EXPECT_EQ(nyc.entry_day_offset, -1);
 
     const auto& chi = config.tabs[0].series[1];
     EXPECT_EQ(chi.series_ticker, "KXLOWTCHI");
     EXPECT_EQ(chi.entry_hour, -1);  // Not specified, stays default
+    EXPECT_EQ(chi.entry_day_offset, 0);  // Not specified, stays default
 
     // Second tab
     EXPECT_EQ(config.tabs[1].name, "Politics");
@@ -156,4 +159,27 @@ TEST(ConfigLoadTest, FindSeriesAcrossTabs) {
     const TrackedSeries* found = config.findSeries("KXLOWTCHI");
     ASSERT_NE(found, nullptr);
     EXPECT_EQ(found->label, "Chicago Low Temp");
+}
+
+// --- Config::loadAuth ---
+
+TEST(ConfigLoadAuthTest, ValidAuthFile) {
+    Config config;
+    config.loadAuth(testDataPath("valid_auth.json"));
+    EXPECT_EQ(config.api_key_id, "test-key-id-123");
+    EXPECT_EQ(config.key_file, "/tmp/test.key");
+    EXPECT_TRUE(config.hasAuth());
+}
+
+TEST(ConfigLoadAuthTest, MissingFile_NoAuth) {
+    Config config;
+    config.loadAuth("/nonexistent/auth.json");
+    EXPECT_TRUE(config.api_key_id.empty());
+    EXPECT_TRUE(config.key_file.empty());
+    EXPECT_FALSE(config.hasAuth());
+}
+
+TEST(ConfigLoadAuthTest, ConfigWithoutAuth_HasNoAuth) {
+    Config config = Config::loadFromFile(testDataPath("valid_config.json"));
+    EXPECT_FALSE(config.hasAuth());
 }

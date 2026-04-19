@@ -13,8 +13,18 @@ std::string Config::default_path() {
     return std::string(home) + "/.config/predibloom/config.json";
 }
 
+std::string Config::auth_path() {
+    const char* home = std::getenv("HOME");
+    if (!home) {
+        home = "/tmp";
+    }
+    return std::string(home) + "/.config/predibloom/auth.json";
+}
+
 Config Config::load() {
-    return loadFromFile(default_path());
+    auto config = loadFromFile(default_path());
+    config.loadAuth(auth_path());
+    return config;
 }
 
 Config Config::loadFromFile(const std::string& path) {
@@ -25,21 +35,6 @@ Config Config::loadFromFile(const std::string& path) {
         try {
             nlohmann::json j;
             file >> j;
-
-            if (j.contains("api_key_id")) {
-                config.api_key_id = j["api_key_id"];
-            }
-            if (j.contains("key_file")) {
-                std::string kf = j["key_file"];
-                // Expand ~ to HOME
-                if (!kf.empty() && kf[0] == '~') {
-                    const char* home = std::getenv("HOME");
-                    if (home) {
-                        kf = std::string(home) + kf.substr(1);
-                    }
-                }
-                config.key_file = kf;
-            }
 
             if (j.contains("tabs")) {
                 for (const auto& tab_json : j["tabs"]) {
@@ -64,6 +59,9 @@ Config Config::loadFromFile(const std::string& path) {
                         if (series_json.contains("entry_hour")) {
                             ts.entry_hour = series_json["entry_hour"];
                         }
+                        if (series_json.contains("entry_day_offset")) {
+                            ts.entry_day_offset = series_json["entry_day_offset"];
+                        }
                         tab.series.push_back(ts);
                     }
                     config.tabs.push_back(tab);
@@ -85,6 +83,32 @@ const TrackedSeries* Config::findSeries(const std::string& series_ticker) const 
         }
     }
     return nullptr;
+}
+
+void Config::loadAuth(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.good()) return;
+
+    try {
+        nlohmann::json j;
+        file >> j;
+
+        if (j.contains("api_key_id")) {
+            api_key_id = j["api_key_id"];
+        }
+        if (j.contains("key_file")) {
+            std::string kf = j["key_file"];
+            if (!kf.empty() && kf[0] == '~') {
+                const char* home = std::getenv("HOME");
+                if (home) {
+                    kf = std::string(home) + kf.substr(1);
+                }
+            }
+            key_file = kf;
+        }
+    } catch (...) {
+        // Invalid auth file, skip
+    }
 }
 
 } // namespace predibloom::core

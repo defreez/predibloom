@@ -6,11 +6,13 @@
 #include "../core/config.hpp"
 #include "../core/weather_comparison.hpp"
 #include "formatters.hpp"
+#include "../core/time_utils.hpp"
 #include <iostream>
 #include <iomanip>
 #include <map>
 #include <algorithm>
 #include <cmath>
+#include <random>
 
 namespace {
 
@@ -247,6 +249,8 @@ int main(int argc, char** argv) {
     double backtest_trade_size = 0.0;  // Dollars per trade (0 = use 10x margin)
     int backtest_entry_hour = -1;      // -1 = use per-series config (5 high, 17 low)
     int backtest_exit_hour = -1;       // -1 = hold to settlement
+    int backtest_seed = -1;            // -1 = random seed
+    int backtest_jitter = 3;           // +/- hours for entry time randomization
 
     backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s) (default: all configured)")
         ->delimiter(',');
@@ -268,6 +272,11 @@ int main(int argc, char** argv) {
     backtest_cmd->add_option("--exit-hour", backtest_exit_hour, "Hour UTC to exit (-1 = hold to settlement)")
         ->default_val(-1)
         ->check(CLI::Range(-1, 23));
+    backtest_cmd->add_option("--seed", backtest_seed, "RNG seed for jitter (-1 = random)")
+        ->default_val(-1);
+    backtest_cmd->add_option("--jitter", backtest_jitter, "Entry time jitter +/- hours (0 = no jitter)")
+        ->default_val(3)
+        ->check(CLI::Range(0, 12));
 
     // Predict command options
     std::string predict_series;
@@ -687,10 +696,24 @@ int main(int argc, char** argv) {
             std::cerr << "  Exit: hold to settlement\n";
         }
         if (backtest_trade_size > 0) {
-            std::cerr << "  Trade size: $" << backtest_trade_size << " per trade\n\n";
+            std::cerr << "  Trade size: $" << backtest_trade_size << " per trade\n";
         } else {
-            std::cerr << "  Trade size: $10 per °F margin\n\n";
+            std::cerr << "  Trade size: $10 per °F margin\n";
         }
+        if (backtest_jitter > 0) {
+            std::cerr << "  Jitter: +/-" << backtest_jitter << "hr";
+            if (backtest_seed >= 0) {
+                std::cerr << " (seed=" << backtest_seed << ")";
+            }
+            std::cerr << "\n";
+        }
+        std::cerr << "\n";
+
+        // Initialize RNG for entry time jitter
+        std::mt19937 rng(backtest_seed >= 0
+            ? static_cast<unsigned>(backtest_seed)
+            : std::random_device{}());
+        std::uniform_int_distribution<int> jitter_dist(-backtest_jitter, backtest_jitter);
 
         // Backtest results (moved before loop)
         struct Trade {
@@ -861,9 +884,9 @@ int main(int argc, char** argv) {
             // Build target hour prefix: "YYYY-MM-DDTHH"
             int effective_entry_hour = (backtest_entry_hour >= 0)
                 ? backtest_entry_hour : series_config->effectiveEntryHour();
-            char hour_buf[3];
-            snprintf(hour_buf, sizeof(hour_buf), "%02d", effective_entry_hour);
-            std::string target_hour = date + "T" + hour_buf;
+            int delta = (backtest_jitter > 0) ? jitter_dist(rng) : 0;
+            std::string target_hour = predibloom::core::computeEntryDatetimeWithJitter(
+                date, series_config->entry_day_offset, effective_entry_hour, delta);
 
             // Find the most recent trade at or before the target hour
             // (trades may not be sorted, so we find the max timestamp <= target)
@@ -1133,6 +1156,7 @@ int main(int argc, char** argv) {
             double ask;
             bool tradeable;
             bool between_brackets;  // forecast doesn't fall into any bracket
+            bool within_window;     // current time is within entry window
         };
         std::vector<Prediction> predictions;
 
@@ -1224,6 +1248,13 @@ int main(int argc, char** argv) {
                 p.ask = 0;
                 p.tradeable = false;
             }
+
+            // Check if current time is within entry window
+            auto entry_dt = predibloom::core::computeEntryDatetime(
+                predict_date, series_config->entry_day_offset,
+                series_config->effectiveEntryHour());
+            p.within_window = predibloom::core::isWithinEntryWindow(entry_dt, 3);
+
             predictions.push_back(p);
         }
 
@@ -1263,9 +1294,11 @@ int main(int argc, char** argv) {
                 std::cout << std::setw(8) << margin_buf
                           << std::setw(8) << (std::to_string((int)p.bid) + "¢")
                           << std::setw(8) << (std::to_string((int)p.ask) + "¢");
-                if (p.tradeable) {
+                if (p.tradeable && p.within_window) {
                     std::cout << "BUY";
                     tradeable_count++;
+                } else if (p.tradeable && !p.within_window) {
+                    std::cout << "WAIT";
                 } else if (p.margin >= predict_margin && p.ask > predict_max_price) {
                     std::cout << "EXPENSIVE";
                 } else {
@@ -1282,7 +1315,7 @@ int main(int argc, char** argv) {
         if (tradeable_count > 0) {
             std::cout << "\nTickers to buy:\n";
             for (const auto& p : predictions) {
-                if (p.tradeable) {
+                if (p.tradeable && p.within_window) {
                     std::cout << "  " << p.ticker << "  " << p.label << " " << p.strike
                               << " @ " << (int)p.ask << "¢\n";
                 }
@@ -1509,7 +1542,7 @@ int main(int argc, char** argv) {
     if (*fills_cmd) {
         if (!config.hasAuth()) {
             std::cerr << "Error: Authentication not configured.\n";
-            std::cerr << "Add api_key_id and key_file to ~/.config/predibloom/config.json\n";
+            std::cerr << "Add api_key_id and key_file to ~/.config/predibloom/auth.json\n";
             return 1;
         }
 
@@ -1605,12 +1638,17 @@ int main(int argc, char** argv) {
                 int pt = (utc - 7 + 24) % 24;  // UTC to PT (PDT)
                 std::string pt_ampm = (pt >= 12) ? "pm" : "am";
                 int pt12 = (pt % 12 == 0) ? 12 : (pt % 12);
-                std::string day_note = (utc < 7) ? " prev day" : "";
+                std::string day_note = (utc < 7) ? " prev" : "";
+                if (s.entry_day_offset != 0) {
+                    char d_buf[8];
+                    snprintf(d_buf, sizeof(d_buf), " D%+d", s.entry_day_offset);
+                    day_note += d_buf;
+                }
 
                 char offset_buf[16];
                 snprintf(offset_buf, sizeof(offset_buf), "%+.1f F", s.offset);
 
-                char entry_buf[24];
+                char entry_buf[32];
                 snprintf(entry_buf, sizeof(entry_buf), "%d%s%s", pt12, pt_ampm.c_str(), day_note.c_str());
 
                 std::cout << std::left << std::setw(16) << s.series_ticker

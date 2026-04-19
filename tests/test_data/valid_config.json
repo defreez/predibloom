@@ -10,7 +10,8 @@
           "longitude": -74.006,
           "nws_station": "KNYC",
           "offset": 2.5,
-          "entry_hour": 5
+          "entry_hour": 5,
+          "entry_day_offset": -1
         },
         {
           "series_ticker": "KXLOWTCHI",

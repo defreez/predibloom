@@ -19,7 +19,8 @@ struct TrackedSeries {
     double longitude = 0;
     std::string nws_station;
     double offset = 2.0;  // Calibration offset for Open-Meteo -> NWS
-    int entry_hour = -1;   // UTC hour for backtest entry (-1 = use default: 5 high, 17 low)
+    int entry_hour = -1;   // UTC hour for backtest entry (-1 = use default: 4 UTC)
+    int entry_day_offset = 0;  // 0 = same UTC day as settlement, -1 = day before
 
     bool isLowTemp() const { return isLowTempSeries(series_ticker); }
 
@@ -49,7 +50,9 @@ struct Config {
 
     static Config load();
     static Config loadFromFile(const std::string& path);
+    void loadAuth(const std::string& path);
     static std::string default_path();
+    static std::string auth_path();
 };
 
 } // namespace predibloom::core

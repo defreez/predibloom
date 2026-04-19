@@ -118,6 +118,7 @@ add_executable(predibloom_tests
     tests/test_config.cpp
     tests/test_formatters.cpp
     tests/test_rate_limiter.cpp
+    tests/test_time_utils.cpp
 )
 
 target_link_libraries(predibloom_tests PRIVATE
