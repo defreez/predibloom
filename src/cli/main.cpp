@@ -143,6 +143,7 @@ int main(int argc, char** argv) {
     auto* series_cmd = app.add_subcommand("series", "List configured series with entry hours");
     auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset by comparing Open-Meteo vs NWS actuals");
     auto* fills_cmd = app.add_subcommand("fills", "Show your trade fills (requires auth)");
+    auto* portfolio_cmd = app.add_subcommand("portfolio", "Show current positions and balance (requires auth)");
 
     // Markets command options
     std::string markets_status = "open";
@@ -1629,6 +1630,140 @@ int main(int argc, char** argv) {
 
             std::cout << std::string(79, '-') << "\n";
             std::cout << fills.size() << " fills\n";
+        }
+    }
+
+    // Handle portfolio command
+    if (*portfolio_cmd) {
+        if (!config.hasAuth()) {
+            std::cerr << "Error: Authentication not configured.\n";
+            std::cerr << "Add api_key_id and key_file to ~/.config/predibloom/auth.json\n";
+            return 1;
+        }
+
+        client.setAuth(config.api_key_id, config.key_file);
+
+        // Fetch balance
+        auto balance_result = client.getBalance();
+        if (!balance_result.ok()) {
+            std::cerr << "Error fetching balance: " << balance_result.error().message << "\n";
+            return 1;
+        }
+        const auto& bal = balance_result.value();
+
+        char bal_buf[32], pv_buf[32], total_buf[32];
+        snprintf(bal_buf, sizeof(bal_buf), "$%.2f", bal.balance / 100.0);
+        snprintf(pv_buf, sizeof(pv_buf), "$%.2f", bal.portfolio_value / 100.0);
+        snprintf(total_buf, sizeof(total_buf), "$%.2f", (bal.balance + bal.portfolio_value) / 100.0);
+
+        std::cout << "\n=== PORTFOLIO ===\n\n";
+        std::cout << "Balance:   " << bal_buf << "\n";
+        std::cout << "Portfolio: " << pv_buf << "\n";
+        std::cout << "Total:     " << total_buf << "\n";
+
+        // Fetch positions
+        auto positions_result = client.getAllPositions();
+        if (!positions_result.ok()) {
+            std::cerr << "Error fetching positions: " << positions_result.error().message << "\n";
+            return 1;
+        }
+
+        // Filter to only positions with non-zero count
+        std::vector<predibloom::api::Position> open_positions;
+        for (const auto& p : positions_result.value()) {
+            if (p.position() != 0) {
+                open_positions.push_back(p);
+            }
+        }
+
+        std::cout << "\n--- Open Positions ---\n";
+        if (open_positions.empty()) {
+            std::cout << "No open positions\n";
+        } else {
+            std::cout << std::left
+                      << std::setw(36) << "Ticker"
+                      << std::right
+                      << std::setw(5) << "Pos"
+                      << std::setw(10) << "Exposure"
+                      << std::setw(10) << "Realized"
+                      << std::setw(10) << "Fees"
+                      << "\n";
+            std::cout << std::string(71, '-') << "\n";
+
+            for (const auto& p : open_positions) {
+                std::string ticker_display = p.ticker;
+                if (ticker_display.size() > 34) {
+                    ticker_display = ticker_display.substr(0, 34);
+                }
+
+                char exp_buf[16], pnl_buf[16], fee_buf[16];
+                snprintf(exp_buf, sizeof(exp_buf), "$%.2f", p.exposure_cents() / 100.0);
+                snprintf(pnl_buf, sizeof(pnl_buf), "$%.2f", p.realized_pnl_cents() / 100.0);
+                snprintf(fee_buf, sizeof(fee_buf), "$%.2f", p.fees_cents() / 100.0);
+
+                std::cout << std::left
+                          << std::setw(36) << ticker_display
+                          << std::right
+                          << std::setw(5) << p.position()
+                          << std::setw(10) << exp_buf
+                          << std::setw(10) << pnl_buf
+                          << std::setw(10) << fee_buf
+                          << "\n";
+            }
+            std::cout << std::string(71, '-') << "\n";
+            std::cout << open_positions.size() << " positions\n";
+        }
+
+        // Fetch recent settlements (last 7 days)
+        predibloom::api::GetSettlementsParams settle_params;
+        auto now = std::time(nullptr);
+        settle_params.min_ts = now - 7 * 24 * 3600;
+        settle_params.limit = 100;
+
+        auto settle_result = client.getSettlements(settle_params);
+        if (settle_result.ok()) {
+            const auto& settlements = settle_result.value().settlements;
+
+            std::cout << "\n--- Recent Settlements (7d) ---\n";
+            if (settlements.empty()) {
+                std::cout << "No recent settlements\n";
+            } else {
+                std::cout << std::left
+                          << std::setw(36) << "Ticker"
+                          << std::setw(8) << "Result"
+                          << std::right
+                          << std::setw(10) << "Revenue"
+                          << "\n";
+                std::cout << std::string(54, '-') << "\n";
+
+                double total_revenue = 0;
+                for (const auto& s : settlements) {
+                    std::string ticker_display = s.ticker;
+                    if (ticker_display.size() > 34) {
+                        ticker_display = ticker_display.substr(0, 34);
+                    }
+
+                    std::string result_upper = s.market_result;
+                    for (auto& c : result_upper) c = std::toupper(c);
+
+                    char rev_buf[16];
+                    snprintf(rev_buf, sizeof(rev_buf), "$%.2f", s.revenue_dollars());
+
+                    std::cout << std::left
+                              << std::setw(36) << ticker_display
+                              << std::setw(8) << result_upper
+                              << std::right
+                              << std::setw(10) << rev_buf
+                              << "\n";
+                    total_revenue += s.revenue_dollars();
+                }
+
+                char total_rev_buf[16];
+                snprintf(total_rev_buf, sizeof(total_rev_buf), "$%.2f", total_revenue);
+
+                std::cout << std::string(54, '-') << "\n";
+                std::cout << settlements.size() << " settlements, total revenue: " << total_rev_buf << "\n";
+            }
         }
     }
 

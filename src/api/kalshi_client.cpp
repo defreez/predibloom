@@ -356,4 +356,110 @@ Result<std::vector<Fill>> KalshiClient::getAllFills(const GetFillsParams& params
     return all_fills;
 }
 
+Result<Balance> KalshiClient::getBalance() {
+    std::string path = std::string(API_BASE) + "/portfolio/balance";
+
+    auto result = authGet(path);
+    if (!result.ok()) {
+        return result.error();
+    }
+
+    try {
+        auto json = nlohmann::json::parse(result.value());
+        return json.get<Balance>();
+    } catch (const nlohmann::json::exception& e) {
+        return Error(ApiError::ParseError,
+            std::string("JSON parse error: ") + e.what());
+    }
+}
+
+Result<PositionsResponse> KalshiClient::getPositions(const GetPositionsParams& params) {
+    std::ostringstream path_ss;
+    path_ss << API_BASE << "/portfolio/positions";
+
+    bool first = true;
+    auto append = [&](const char* key, const std::string& value) {
+        path_ss << (first ? "?" : "&") << key << "=" << value;
+        first = false;
+    };
+
+    if (params.ticker) append("ticker", *params.ticker);
+    if (params.event_ticker) append("event_ticker", *params.event_ticker);
+    if (params.limit) append("limit", std::to_string(*params.limit));
+    if (params.cursor) append("cursor", *params.cursor);
+
+    std::string path = path_ss.str();
+
+    auto result = authGet(path);
+    if (!result.ok()) {
+        return result.error();
+    }
+
+    try {
+        auto json = nlohmann::json::parse(result.value());
+        return json.get<PositionsResponse>();
+    } catch (const nlohmann::json::exception& e) {
+        return Error(ApiError::ParseError,
+            std::string("JSON parse error: ") + e.what());
+    }
+}
+
+Result<std::vector<Position>> KalshiClient::getAllPositions(const GetPositionsParams& params) {
+    std::vector<Position> all;
+    GetPositionsParams current_params = params;
+    if (!current_params.limit) {
+        current_params.limit = 200;
+    }
+
+    while (true) {
+        auto result = getPositions(current_params);
+        if (!result.ok()) {
+            return result.error();
+        }
+
+        auto& response = result.value();
+        all.insert(all.end(),
+            response.market_positions.begin(), response.market_positions.end());
+
+        if (!response.has_more()) {
+            break;
+        }
+
+        current_params.cursor = response.cursor;
+    }
+
+    return all;
+}
+
+Result<SettlementsResponse> KalshiClient::getSettlements(const GetSettlementsParams& params) {
+    std::ostringstream path_ss;
+    path_ss << API_BASE << "/portfolio/settlements";
+
+    bool first = true;
+    auto append = [&](const char* key, const std::string& value) {
+        path_ss << (first ? "?" : "&") << key << "=" << value;
+        first = false;
+    };
+
+    if (params.ticker) append("ticker", *params.ticker);
+    if (params.min_ts) append("min_ts", std::to_string(*params.min_ts));
+    if (params.limit) append("limit", std::to_string(*params.limit));
+    if (params.cursor) append("cursor", *params.cursor);
+
+    std::string path = path_ss.str();
+
+    auto result = authGet(path);
+    if (!result.ok()) {
+        return result.error();
+    }
+
+    try {
+        auto json = nlohmann::json::parse(result.value());
+        return json.get<SettlementsResponse>();
+    } catch (const nlohmann::json::exception& e) {
+        return Error(ApiError::ParseError,
+            std::string("JSON parse error: ") + e.what());
+    }
+}
+
 } // namespace predibloom::api

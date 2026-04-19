@@ -261,4 +261,91 @@ inline void from_json(const nlohmann::json& j, FillsResponse& r) {
     if (j.contains("cursor") && !j.at("cursor").is_null()) j.at("cursor").get_to(r.cursor);
 }
 
+// --- Portfolio types ---
+
+struct Position {
+    std::string ticker;
+    std::string position_fp;
+    std::string market_exposure_dollars;
+    std::string realized_pnl_dollars;
+    std::string fees_paid_dollars;
+    std::string total_traded_dollars;
+
+    int position() const { return std::atoi(position_fp.c_str()); }
+    double exposure_cents() const { return std::atof(market_exposure_dollars.c_str()) * 100.0; }
+    double realized_pnl_cents() const { return std::atof(realized_pnl_dollars.c_str()) * 100.0; }
+    double fees_cents() const { return std::atof(fees_paid_dollars.c_str()) * 100.0; }
+};
+
+inline void from_json(const nlohmann::json& j, Position& p) {
+    if (j.contains("ticker")) j.at("ticker").get_to(p.ticker);
+    if (j.contains("position_fp")) j.at("position_fp").get_to(p.position_fp);
+    if (j.contains("market_exposure_dollars")) j.at("market_exposure_dollars").get_to(p.market_exposure_dollars);
+    if (j.contains("realized_pnl_dollars")) j.at("realized_pnl_dollars").get_to(p.realized_pnl_dollars);
+    if (j.contains("fees_paid_dollars")) j.at("fees_paid_dollars").get_to(p.fees_paid_dollars);
+    if (j.contains("total_traded_dollars")) j.at("total_traded_dollars").get_to(p.total_traded_dollars);
+}
+
+struct PositionsResponse {
+    std::vector<Position> market_positions;
+    std::string cursor;
+    bool has_more() const { return !cursor.empty(); }
+};
+
+inline void from_json(const nlohmann::json& j, PositionsResponse& r) {
+    if (j.contains("market_positions")) j.at("market_positions").get_to(r.market_positions);
+    if (j.contains("cursor") && !j.at("cursor").is_null()) j.at("cursor").get_to(r.cursor);
+}
+
+struct Balance {
+    int64_t balance = 0;
+    int64_t portfolio_value = 0;
+};
+
+inline void from_json(const nlohmann::json& j, Balance& b) {
+    if (j.contains("balance")) j.at("balance").get_to(b.balance);
+    if (j.contains("portfolio_value")) j.at("portfolio_value").get_to(b.portfolio_value);
+}
+
+struct Settlement {
+    std::string ticker;
+    std::string event_ticker;
+    std::string market_result;
+    int revenue = 0;
+    std::string settled_time;
+    std::string yes_count_fp;
+    std::string no_count_fp;
+    std::string yes_total_cost_dollars;
+    std::string no_total_cost_dollars;
+
+    int yes_count() const { return std::atoi(yes_count_fp.c_str()); }
+    int no_count() const { return std::atoi(no_count_fp.c_str()); }
+    double revenue_dollars() const { return revenue / 100.0; }
+    double yes_cost_cents() const { return std::atof(yes_total_cost_dollars.c_str()) * 100.0; }
+    double no_cost_cents() const { return std::atof(no_total_cost_dollars.c_str()) * 100.0; }
+};
+
+inline void from_json(const nlohmann::json& j, Settlement& s) {
+    if (j.contains("ticker")) j.at("ticker").get_to(s.ticker);
+    if (j.contains("event_ticker")) j.at("event_ticker").get_to(s.event_ticker);
+    if (j.contains("market_result")) j.at("market_result").get_to(s.market_result);
+    if (j.contains("revenue") && !j.at("revenue").is_null()) j.at("revenue").get_to(s.revenue);
+    if (j.contains("settled_time")) j.at("settled_time").get_to(s.settled_time);
+    if (j.contains("yes_count_fp")) j.at("yes_count_fp").get_to(s.yes_count_fp);
+    if (j.contains("no_count_fp")) j.at("no_count_fp").get_to(s.no_count_fp);
+    if (j.contains("yes_total_cost_dollars")) j.at("yes_total_cost_dollars").get_to(s.yes_total_cost_dollars);
+    if (j.contains("no_total_cost_dollars")) j.at("no_total_cost_dollars").get_to(s.no_total_cost_dollars);
+}
+
+struct SettlementsResponse {
+    std::vector<Settlement> settlements;
+    std::string cursor;
+    bool has_more() const { return !cursor.empty(); }
+};
+
+inline void from_json(const nlohmann::json& j, SettlementsResponse& r) {
+    if (j.contains("settlements")) j.at("settlements").get_to(r.settlements);
+    if (j.contains("cursor") && !j.at("cursor").is_null()) j.at("cursor").get_to(r.cursor);
+}
+
 } // namespace predibloom::api

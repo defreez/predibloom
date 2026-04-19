@@ -44,6 +44,20 @@ struct GetFillsParams {
     std::optional<std::string> cursor;
 };
 
+struct GetPositionsParams {
+    std::optional<std::string> ticker;
+    std::optional<std::string> event_ticker;
+    std::optional<int> limit;
+    std::optional<std::string> cursor;
+};
+
+struct GetSettlementsParams {
+    std::optional<std::string> ticker;
+    std::optional<int64_t> min_ts;
+    std::optional<int> limit;
+    std::optional<std::string> cursor;
+};
+
 class KalshiClient {
 public:
     KalshiClient();
@@ -65,6 +79,10 @@ public:
     // Authenticated endpoints
     Result<FillsResponse> getFills(const GetFillsParams& params = {});
     Result<std::vector<Fill>> getAllFills(const GetFillsParams& params = {});
+    Result<Balance> getBalance();
+    Result<PositionsResponse> getPositions(const GetPositionsParams& params = {});
+    Result<std::vector<Position>> getAllPositions(const GetPositionsParams& params = {});
+    Result<SettlementsResponse> getSettlements(const GetSettlementsParams& params = {});
 
     void setCaching(bool enabled) { caching_ = enabled; }
 
