@@ -1505,6 +1505,89 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Handle fills command
+    if (*fills_cmd) {
+        if (!config.hasAuth()) {
+            std::cerr << "Error: Authentication not configured.\n";
+            std::cerr << "Add api_key_id and key_file to ~/.config/predibloom/config.json\n";
+            return 1;
+        }
+
+        client.setAuth(config.api_key_id, config.key_file);
+
+        predibloom::api::GetFillsParams params;
+        if (!fills_ticker.empty()) params.ticker = fills_ticker;
+        params.limit = fills_limit;
+
+        auto result = client.getFills(params);
+        if (!result.ok()) {
+            std::cerr << "Error: " << result.error().message << "\n";
+            return 1;
+        }
+
+        const auto& fills = result.value().fills;
+
+        if (fills_format == "json") {
+            nlohmann::json j = nlohmann::json::array();
+            for (const auto& f : fills) {
+                j.push_back({
+                    {"fill_id", f.fill_id},
+                    {"ticker", f.ticker},
+                    {"side", f.side},
+                    {"action", f.action},
+                    {"count", f.count()},
+                    {"yes_price_cents", f.yes_price_cents()},
+                    {"is_taker", f.is_taker},
+                    {"created_time", f.created_time}
+                });
+            }
+            std::cout << j.dump(2) << "\n";
+        } else if (fills_format == "csv") {
+            std::cout << "time,ticker,side,action,qty,price_cents,taker\n";
+            for (const auto& f : fills) {
+                std::cout << f.created_time << ","
+                          << f.ticker << ","
+                          << f.side << ","
+                          << f.action << ","
+                          << f.count() << ","
+                          << static_cast<int>(f.yes_price_cents()) << ","
+                          << (f.is_taker ? "yes" : "no") << "\n";
+            }
+        } else {
+            // Table format
+            std::cout << std::left
+                      << std::setw(22) << "Time"
+                      << std::setw(28) << "Ticker"
+                      << std::setw(6) << "Side"
+                      << std::setw(6) << "Act"
+                      << std::right
+                      << std::setw(5) << "Qty"
+                      << std::setw(8) << "Price"
+                      << "  " << "Taker\n";
+            std::cout << std::string(79, '-') << "\n";
+
+            for (const auto& f : fills) {
+                std::string ticker_display = f.ticker;
+                if (ticker_display.size() > 26) {
+                    ticker_display = ticker_display.substr(0, 26);
+                }
+
+                std::cout << std::left
+                          << std::setw(22) << f.created_time.substr(0, 19)
+                          << std::setw(28) << ticker_display
+                          << std::setw(6) << f.side
+                          << std::setw(6) << f.action
+                          << std::right
+                          << std::setw(5) << f.count()
+                          << std::setw(7) << static_cast<int>(f.yes_price_cents()) << "c"
+                          << "  " << (f.is_taker ? "yes" : "no") << "\n";
+            }
+
+            std::cout << std::string(79, '-') << "\n";
+            std::cout << fills.size() << " fills\n";
+        }
+    }
+
     // Handle series command
     if (*series_cmd) {
         std::cout << std::left << std::setw(16) << "Ticker"
