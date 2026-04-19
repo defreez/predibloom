@@ -61,6 +61,8 @@ private:
     // Detail panel state
     std::optional<api::Orderbook> selected_orderbook_;
     std::optional<core::ComparisonPoint> selected_comparison_;
+    std::vector<api::Trade> selected_trades_;
+    std::optional<core::ComparisonSummary> selected_comparison_summary_;
 
     // UI state
     bool is_loading_ = false;

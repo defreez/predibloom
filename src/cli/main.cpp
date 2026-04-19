@@ -138,7 +138,9 @@ int main(int argc, char** argv) {
     auto* winners_cmd = app.add_subcommand("winners", "Price history for settled brackets with weather overlay");
     auto* backtest_cmd = app.add_subcommand("backtest", "Backtest trading strategy using forecasts");
     auto* predict_cmd = app.add_subcommand("predict", "Predict trade for a given day");
+    auto* series_cmd = app.add_subcommand("series", "List configured series with entry hours");
     auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset by comparing Open-Meteo vs NWS actuals");
+    auto* fills_cmd = app.add_subcommand("fills", "Show your trade fills (requires auth)");
 
     // Markets command options
     std::string markets_status = "open";
@@ -292,6 +294,19 @@ int main(int argc, char** argv) {
         ->required();
     calibrate_cmd->add_option("--end", calibrate_end, "End date YYYY-MM-DD")
         ->required();
+
+    // Fills command options
+    std::string fills_ticker;
+    int fills_limit = 100;
+    std::string fills_format = "table";
+
+    fills_cmd->add_option("-t,--ticker", fills_ticker, "Filter by market ticker");
+    fills_cmd->add_option("-n,--limit", fills_limit, "Number of results")
+        ->default_val(100)
+        ->check(CLI::Range(1, 1000));
+    fills_cmd->add_option("-f,--format", fills_format, "Output format: table|json|csv")
+        ->default_val("table")
+        ->check(CLI::IsMember({"table", "json", "csv"}));
 
     // Require at least one subcommand
     app.require_subcommand(1);
@@ -1487,6 +1502,41 @@ int main(int argc, char** argv) {
             std::cout << std::string(68, '-') << "\n";
             std::cout << "\nOffset = mean(NWS_actual - OpenMeteo_forecast)\n";
             std::cout << "Delta = recommended offset - current config offset\n";
+        }
+    }
+
+    // Handle series command
+    if (*series_cmd) {
+        std::cout << std::left << std::setw(16) << "Ticker"
+                  << std::setw(20) << "Label"
+                  << std::right << std::setw(8) << "Offset"
+                  << "  " << std::left << std::setw(14) << "Entry (PT)"
+                  << std::setw(6) << "NWS"
+                  << "\n";
+        std::cout << std::string(66, '-') << "\n";
+
+        for (const auto& tab : config.tabs) {
+            for (const auto& s : tab.series) {
+                if (s.latitude == 0) continue;  // skip non-weather series
+                int utc = s.effectiveEntryHour();
+                int pt = (utc - 7 + 24) % 24;  // UTC to PT (PDT)
+                std::string pt_ampm = (pt >= 12) ? "pm" : "am";
+                int pt12 = (pt % 12 == 0) ? 12 : (pt % 12);
+                std::string day_note = (utc < 7) ? " prev day" : "";
+
+                char offset_buf[16];
+                snprintf(offset_buf, sizeof(offset_buf), "%+.1f F", s.offset);
+
+                char entry_buf[24];
+                snprintf(entry_buf, sizeof(entry_buf), "%d%s%s", pt12, pt_ampm.c_str(), day_note.c_str());
+
+                std::cout << std::left << std::setw(16) << s.series_ticker
+                          << std::setw(20) << s.label
+                          << std::right << std::setw(8) << offset_buf
+                          << "  " << std::left << std::setw(14) << entry_buf
+                          << std::setw(6) << s.nws_station
+                          << "\n";
+            }
         }
     }
 

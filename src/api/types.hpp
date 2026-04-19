@@ -207,4 +207,58 @@ inline void from_json(const nlohmann::json& j, TradesResponse& r) {
     if (j.contains("cursor") && !j.at("cursor").is_null()) j.at("cursor").get_to(r.cursor);
 }
 
+struct Fill {
+    std::string fill_id;
+    std::string trade_id;
+    std::string order_id;
+    std::string ticker;
+    std::string side;           // "yes" or "no"
+    std::string action;         // "buy" or "sell"
+    std::string count_fp;
+    std::string yes_price_dollars;
+    std::string no_price_dollars;
+    bool is_taker = false;
+    std::string created_time;
+
+    double yes_price_cents() const {
+        return std::atof(yes_price_dollars.c_str()) * 100.0;
+    }
+
+    double no_price_cents() const {
+        return std::atof(no_price_dollars.c_str()) * 100.0;
+    }
+
+    int count() const {
+        return std::atoi(count_fp.c_str());
+    }
+};
+
+inline void from_json(const nlohmann::json& j, Fill& f) {
+    if (j.contains("fill_id")) j.at("fill_id").get_to(f.fill_id);
+    if (j.contains("trade_id")) j.at("trade_id").get_to(f.trade_id);
+    if (j.contains("order_id")) j.at("order_id").get_to(f.order_id);
+    if (j.contains("ticker")) j.at("ticker").get_to(f.ticker);
+    if (j.contains("side")) j.at("side").get_to(f.side);
+    if (j.contains("action")) j.at("action").get_to(f.action);
+    if (j.contains("count_fp")) j.at("count_fp").get_to(f.count_fp);
+    if (j.contains("yes_price_dollars")) j.at("yes_price_dollars").get_to(f.yes_price_dollars);
+    if (j.contains("no_price_dollars")) j.at("no_price_dollars").get_to(f.no_price_dollars);
+    if (j.contains("is_taker") && !j.at("is_taker").is_null()) f.is_taker = j.at("is_taker").get<bool>();
+    if (j.contains("created_time")) j.at("created_time").get_to(f.created_time);
+}
+
+struct FillsResponse {
+    std::vector<Fill> fills;
+    std::string cursor;
+
+    bool has_more() const {
+        return !cursor.empty();
+    }
+};
+
+inline void from_json(const nlohmann::json& j, FillsResponse& r) {
+    if (j.contains("fills")) j.at("fills").get_to(r.fills);
+    if (j.contains("cursor") && !j.at("cursor").is_null()) j.at("cursor").get_to(r.cursor);
+}
+
 } // namespace predibloom::api

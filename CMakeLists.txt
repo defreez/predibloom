@@ -39,6 +39,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cli11)
 
+# Google Test v1.15.2
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG v1.15.2
+)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
 # Find OpenSSL for cpp-httplib HTTPS support
 find_package(OpenSSL REQUIRED)
 
@@ -97,3 +106,28 @@ add_executable(test_api
 target_link_libraries(test_api PRIVATE
     predibloom_core
 )
+
+# Unit tests
+enable_testing()
+
+add_executable(predibloom_tests
+    tests/test_result.cpp
+    tests/test_types.cpp
+    tests/test_openmeteo_types.cpp
+    tests/test_weather_comparison.cpp
+    tests/test_config.cpp
+    tests/test_formatters.cpp
+    tests/test_rate_limiter.cpp
+)
+
+target_link_libraries(predibloom_tests PRIVATE
+    predibloom_core
+    GTest::gtest_main
+)
+
+target_compile_definitions(predibloom_tests PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/test_data"
+)
+
+include(GoogleTest)
+gtest_discover_tests(predibloom_tests)

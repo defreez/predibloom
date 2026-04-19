@@ -1,4 +1,5 @@
 #include "kalshi_client.hpp"
+#include "kalshi_auth.hpp"
 #include "http_cache.hpp"
 
 #include <httplib.h>
@@ -21,6 +22,48 @@ KalshiClient::KalshiClient()
 }
 
 KalshiClient::~KalshiClient() = default;
+
+void KalshiClient::setAuth(const std::string& api_key_id, const std::string& key_file) {
+    auth_ = std::make_unique<KalshiAuth>(api_key_id, key_file);
+}
+
+Result<std::string> KalshiClient::authGet(const std::string& path) {
+    if (!auth_) {
+        return Error(ApiError::HttpError, "Authentication not configured. Set api_key_id and key_file in config.");
+    }
+
+    rate_limiter_.wait_for_token();
+
+    auto headers = auth_->sign("GET", path);
+
+    httplib::Headers hdrs = {
+        {"KALSHI-ACCESS-KEY", headers.key_id},
+        {"KALSHI-ACCESS-TIMESTAMP", headers.timestamp},
+        {"KALSHI-ACCESS-SIGNATURE", headers.signature}
+    };
+
+    auto res = client_->Get(path, hdrs);
+
+    if (!res) {
+        return Error(ApiError::NetworkError,
+            "Network error: " + httplib::to_string(res.error()));
+    }
+
+    if (res->status == 429) {
+        return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
+    }
+
+    if (res->status == 401) {
+        return Error(ApiError::HttpError, "Authentication failed (401). Check api_key_id and key_file.", 401);
+    }
+
+    if (res->status != 200) {
+        return Error(ApiError::HttpError,
+            "HTTP error: " + std::to_string(res->status) + " " + res->body, res->status);
+    }
+
+    return res->body;
+}
 
 std::string KalshiClient::buildQueryString(const GetEventsParams& params) {
     std::ostringstream qs;
@@ -252,6 +295,65 @@ Result<std::vector<Trade>> KalshiClient::getAllTrades(const std::string& ticker)
     }
 
     return all_trades;
+}
+
+Result<FillsResponse> KalshiClient::getFills(const GetFillsParams& params) {
+    std::ostringstream path_ss;
+    path_ss << API_BASE << "/portfolio/fills";
+
+    bool first = true;
+    auto append = [&](const char* key, const std::string& value) {
+        path_ss << (first ? "?" : "&") << key << "=" << value;
+        first = false;
+    };
+
+    if (params.ticker) append("ticker", *params.ticker);
+    if (params.min_ts) append("min_ts", std::to_string(*params.min_ts));
+    if (params.max_ts) append("max_ts", std::to_string(*params.max_ts));
+    if (params.limit) append("limit", std::to_string(*params.limit));
+    if (params.cursor) append("cursor", *params.cursor);
+
+    std::string path = path_ss.str();
+
+    auto result = authGet(path);
+    if (!result.ok()) {
+        return result.error();
+    }
+
+    try {
+        auto json = nlohmann::json::parse(result.value());
+        return json.get<FillsResponse>();
+    } catch (const nlohmann::json::exception& e) {
+        return Error(ApiError::ParseError,
+            std::string("JSON parse error: ") + e.what());
+    }
+}
+
+Result<std::vector<Fill>> KalshiClient::getAllFills(const GetFillsParams& params) {
+    std::vector<Fill> all_fills;
+    GetFillsParams current_params = params;
+    if (!current_params.limit) {
+        current_params.limit = 100;
+    }
+
+    while (true) {
+        auto result = getFills(current_params);
+        if (!result.ok()) {
+            return result.error();
+        }
+
+        auto& response = result.value();
+        all_fills.insert(all_fills.end(),
+            response.fills.begin(), response.fills.end());
+
+        if (!response.has_more()) {
+            break;
+        }
+
+        current_params.cursor = response.cursor;
+    }
+
+    return all_fills;
 }
 
 } // namespace predibloom::api

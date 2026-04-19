@@ -38,10 +38,17 @@ struct Tab {
 struct Config {
     std::vector<Tab> tabs;
 
+    // Auth (optional - needed for authenticated endpoints like fills)
+    std::string api_key_id;
+    std::string key_file;
+
+    bool hasAuth() const { return !api_key_id.empty() && !key_file.empty(); }
+
     // Find series by ticker (returns nullptr if not found)
     const TrackedSeries* findSeries(const std::string& series_ticker) const;
 
     static Config load();
+    static Config loadFromFile(const std::string& path);
     static std::string default_path();
 };
 

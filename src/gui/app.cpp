@@ -1,5 +1,6 @@
 #include "app.hpp"
 #include "../ui/theme.hpp"
+#include "../ui/chart.hpp"
 #include "raylib.h"
 #include <algorithm>
 #include <cstdio>
@@ -179,6 +180,16 @@ void App::executeCommand(const std::string& cmd_json, std::string& response) {
         else if (command == "get_state") {
             result["state"] = nlohmann::json::parse(getStateJson());
         }
+        else if (command == "select_market") {
+            int idx = cmd["index"];
+            if (idx >= 0 && idx < (int)markets_.size()) {
+                selected_market_idx_ = idx;
+                fetchOrderbook(markets_[idx].ticker);
+            } else {
+                result["status"] = "error";
+                result["message"] = "Index out of range";
+            }
+        }
         else if (command == "quit") {
             // Close window (will exit main loop)
             result["status"] = "ok";
@@ -249,16 +260,28 @@ void App::fetchMarkets() {
     selected_market_idx_ = -1;
     scroll_offset_ = 0.0f;
     selected_orderbook_.reset();
+    selected_trades_.clear();
+    selected_comparison_summary_.reset();
 }
 
 void App::fetchOrderbook(const std::string& ticker) {
     selected_orderbook_.reset();
     selected_comparison_.reset();
+    selected_trades_.clear();
+    selected_comparison_summary_.reset();
 
     auto result = service_->getOrderbook(ticker, 10);
     if (result.ok()) {
         selected_orderbook_ = std::move(result.value());
     }
+
+    // Fetch trade history (cached)
+    client_->setCaching(true);
+    auto trades_result = client_->getAllTrades(ticker);
+    if (trades_result.ok()) {
+        selected_trades_ = std::move(trades_result.value());
+    }
+    client_->setCaching(false);
 
     // Fetch weather comparison for temperature markets with configured coordinates
     if (selected_market_idx_ >= 0) {
@@ -274,6 +297,35 @@ void App::fetchOrderbook(const std::string& ticker) {
                 auto comp_result = comparison_service_->getPoint(market);
                 if (comp_result.ok()) {
                     selected_comparison_ = std::move(comp_result.value());
+                }
+
+                // Fetch series-level comparison for temperature chart (cached)
+                std::string market_date = core::parseDateFromEventTicker(market.event_ticker);
+                if (!market_date.empty()) {
+                    // Go back 30 days from market date for chart range
+                    int year = std::stoi(market_date.substr(0, 4));
+                    int month = std::stoi(market_date.substr(5, 2));
+                    int day = std::stoi(market_date.substr(8, 2));
+                    day -= 30;
+                    while (day <= 0) {
+                        month--;
+                        if (month <= 0) { month = 12; year--; }
+                        int days_in_month[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+                        if (month == 2 && year % 4 == 0) days_in_month[2] = 29;
+                        day += days_in_month[month];
+                    }
+                    char start_buf[16];
+                    snprintf(start_buf, sizeof(start_buf), "%04d-%02d-%02d", year, month, day);
+
+                    client_->setCaching(true);
+                    openmeteo_->setCaching(true);
+                    auto summary_result = comparison_service_->analyze(
+                        series_ticker, std::string(start_buf), market_date);
+                    if (summary_result.ok()) {
+                        selected_comparison_summary_ = std::move(summary_result.value());
+                    }
+                    client_->setCaching(false);
+                    openmeteo_->setCaching(false);
                 }
             }
         }
@@ -534,57 +586,84 @@ void App::DrawRightPanel(int x, int y, int w, int h) const {
         cursor_y += 40;
     }
 
-    // Orderbook
-    DrawText("ORDERBOOK", x + 10, cursor_y, t.font_body, t.accent);
-    cursor_y += 30;
+    // Price History Chart
+    if (!selected_trades_.empty()) {
+        DrawText("PRICE HISTORY", x + 10, cursor_y, t.font_body, t.accent);
+        cursor_y += 25;
 
-    if (!selected_orderbook_.has_value()) {
-        DrawText("Loading orderbook...", x + 10, cursor_y,
-                 t.font_small, t.text_dim);
-        return;
+        // Build chart series from trade data
+        ui::ChartSeries price_series;
+        price_series.color = t.accent;
+        price_series.label = "YES";
+
+        for (size_t i = 0; i < selected_trades_.size(); i++) {
+            float price = (float)selected_trades_[i].yes_price_cents();
+            price_series.points.push_back({(float)i, price});
+        }
+
+        ui::ChartOptions price_opts;
+        price_opts.y_min = 0;
+        price_opts.y_max = 100;
+        if (!selected_trades_.empty()) {
+            // Show abbreviated timestamps for first and last trades
+            const auto& first_time = selected_trades_.back().created_time;
+            const auto& last_time = selected_trades_.front().created_time;
+            if (first_time.size() >= 10) price_opts.x_label_start = first_time.substr(5, 5);
+            if (last_time.size() >= 10) price_opts.x_label_end = last_time.substr(5, 5);
+        }
+
+        int chart_h = std::min(140, (y + h - cursor_y - 10) / 2);
+        if (chart_h > 60) {
+            Rectangle chart_bounds = {(float)(x + 10), (float)cursor_y,
+                                      (float)(w - 20), (float)chart_h};
+            ui::DrawLineChart(chart_bounds, {price_series}, price_opts);
+            cursor_y += chart_h + 15;
+        }
     }
 
-    // Orderbook table headers
-    DrawText("YES", x + 20, cursor_y, t.font_small, t.positive);
-    DrawText("Price", x + 100, cursor_y, t.font_small, t.text_dim);
-    DrawText("Qty", x + 180, cursor_y, t.font_small, t.text_dim);
+    // Temperature History Chart
+    if (selected_comparison_summary_.has_value() &&
+        !selected_comparison_summary_->points.empty()) {
+        DrawText("TEMPERATURE", x + 10, cursor_y, t.font_body, t.accent);
+        cursor_y += 25;
 
-    DrawText("NO", x + 280, cursor_y, t.font_small, t.negative);
-    DrawText("Price", x + 360, cursor_y, t.font_small, t.text_dim);
-    DrawText("Qty", x + 440, cursor_y, t.font_small, t.text_dim);
-    cursor_y += 25;
+        ui::ChartSeries forecast_series;
+        forecast_series.color = t.accent;
+        forecast_series.label = "Forecast";
 
-    // Orderbook levels (top 10)
-    const auto& ob = selected_orderbook_.value();
-    size_t max_levels = std::max(ob.yes.size(), ob.no.size());
-    max_levels = std::min(max_levels, (size_t)10);
+        ui::ChartSeries actual_series;
+        actual_series.color = t.positive;
+        actual_series.label = "Actual";
 
-    for (size_t i = 0; i < max_levels; i++) {
-        char level_text[64];
-
-        // YES side
-        if (i < ob.yes.size()) {
-            snprintf(level_text, sizeof(level_text), "%.0f¢",
-                     ob.yes[i].price_cents());
-            DrawText(level_text, x + 100, cursor_y, t.font_small, t.text);
-
-            snprintf(level_text, sizeof(level_text), "%d",
-                     ob.yes[i].quantity_int());
-            DrawText(level_text, x + 180, cursor_y, t.font_small, t.text);
+        const auto& points = selected_comparison_summary_->points;
+        for (size_t i = 0; i < points.size(); i++) {
+            if (points[i].forecast_temp.has_value()) {
+                forecast_series.points.push_back({(float)i, (float)points[i].forecast_temp.value()});
+            }
+            if (points[i].actual_temp.has_value()) {
+                actual_series.points.push_back({(float)i, (float)points[i].actual_temp.value()});
+            }
         }
 
-        // NO side
-        if (i < ob.no.size()) {
-            snprintf(level_text, sizeof(level_text), "%.0f¢",
-                     ob.no[i].price_cents());
-            DrawText(level_text, x + 360, cursor_y, t.font_small, t.text);
-
-            snprintf(level_text, sizeof(level_text), "%d",
-                     ob.no[i].quantity_int());
-            DrawText(level_text, x + 440, cursor_y, t.font_small, t.text);
+        ui::ChartOptions temp_opts;
+        if (!points.empty()) {
+            const auto& first_date = points.front().date;
+            const auto& last_date = points.back().date;
+            if (first_date.size() >= 10) temp_opts.x_label_start = first_date.substr(5, 5);
+            if (last_date.size() >= 10) temp_opts.x_label_end = last_date.substr(5, 5);
         }
 
-        cursor_y += 22;
+        std::vector<ui::ChartSeries> temp_series;
+        if (!forecast_series.points.empty()) temp_series.push_back(forecast_series);
+        if (!actual_series.points.empty()) temp_series.push_back(actual_series);
+
+        int chart_h = std::min(140, y + h - cursor_y - 10);
+        if (chart_h > 60 && !temp_series.empty()) {
+            Rectangle chart_bounds = {(float)(x + 10), (float)cursor_y,
+                                      (float)(w - 20), (float)chart_h};
+            ui::DrawLineChart(chart_bounds, temp_series, temp_opts);
+            cursor_y += chart_h + 10;
+        }
     }
 }
 

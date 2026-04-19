@@ -14,7 +14,10 @@ std::string Config::default_path() {
 }
 
 Config Config::load() {
-    std::string path = default_path();
+    return loadFromFile(default_path());
+}
+
+Config Config::loadFromFile(const std::string& path) {
     std::ifstream file(path);
 
     Config config;
@@ -22,6 +25,21 @@ Config Config::load() {
         try {
             nlohmann::json j;
             file >> j;
+
+            if (j.contains("api_key_id")) {
+                config.api_key_id = j["api_key_id"];
+            }
+            if (j.contains("key_file")) {
+                std::string kf = j["key_file"];
+                // Expand ~ to HOME
+                if (!kf.empty() && kf[0] == '~') {
+                    const char* home = std::getenv("HOME");
+                    if (home) {
+                        kf = std::string(home) + kf.substr(1);
+                    }
+                }
+                config.key_file = kf;
+            }
 
             if (j.contains("tabs")) {
                 for (const auto& tab_json : j["tabs"]) {

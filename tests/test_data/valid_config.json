@@ -1,0 +1,35 @@
+{
+  "tabs": [
+    {
+      "name": "Climate",
+      "series": [
+        {
+          "series_ticker": "KXHIGHNY",
+          "label": "NYC High Temp",
+          "latitude": 40.7128,
+          "longitude": -74.006,
+          "nws_station": "KNYC",
+          "offset": 2.5,
+          "entry_hour": 5
+        },
+        {
+          "series_ticker": "KXLOWTCHI",
+          "label": "Chicago Low Temp",
+          "latitude": 41.8781,
+          "longitude": -87.6298,
+          "nws_station": "KORD",
+          "offset": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Politics",
+      "series": [
+        {
+          "series_ticker": "KXHORMUZNORM",
+          "label": "Strait of Hormuz"
+        }
+      ]
+    }
+  ]
+}
