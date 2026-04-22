@@ -106,6 +106,9 @@ void Config::loadAuth(const std::string& path) {
             }
             key_file = kf;
         }
+        if (j.contains("gribstream_api_token")) {
+            gribstream_api_token = j["gribstream_api_token"];
+        }
     } catch (...) {
         // Invalid auth file, skip
     }

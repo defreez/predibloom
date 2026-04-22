@@ -84,6 +84,71 @@ inline std::string computeEntryDatetimeWithJitter(
     return computeEntryDatetime(settlement_date, entry_day_offset + extra_days, adjusted_hour);
 }
 
+// Convert a local America/New_York wall-clock "YYYY-MM-DD HH:MM:SS" to an
+// ISO-8601 UTC timestamp. Uses libc with TZ temporarily set to handle DST.
+// Returns empty string on parse failure.
+// NOTE: not thread-safe (modifies TZ env var via setenv/tzset).
+inline std::string nyLocalToUtcIso(int year, int month, int day,
+                                    int hour, int minute, int second) {
+    std::tm local = {};
+    local.tm_year = year - 1900;
+    local.tm_mon = month - 1;
+    local.tm_mday = day;
+    local.tm_hour = hour;
+    local.tm_min = minute;
+    local.tm_sec = second;
+    local.tm_isdst = -1;  // let mktime decide
+
+    char* orig_tz = std::getenv("TZ");
+    std::string saved_tz = orig_tz ? orig_tz : "";
+    bool had_tz = orig_tz != nullptr;
+
+    setenv("TZ", "America/New_York", 1);
+    tzset();
+    time_t t = mktime(&local);
+
+    if (had_tz) setenv("TZ", saved_tz.c_str(), 1);
+    else unsetenv("TZ");
+    tzset();
+
+    if (t == (time_t)-1) return "";
+
+    std::tm utc = {};
+    gmtime_r(&t, &utc);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                  utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+                  utc.tm_hour, utc.tm_min, utc.tm_sec);
+    return buf;
+}
+
+// ISO-8601 UTC timestamp for local midnight in America/New_York on the given date.
+// Returns empty string on parse failure.
+inline std::string nyMidnightToUtcIso(const std::string& date) {
+    std::tm tm = {};
+    if (!parseDateString(date, tm)) return "";
+    return nyLocalToUtcIso(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, 0, 0, 0);
+}
+
+// Compute ISO-8601 UTC timestamp ("YYYY-MM-DDTHH:MM:SSZ") for the entry moment
+// used as GribStream's asOf parameter: (settlement_date + entry_day_offset) at entry_hour UTC.
+// Returns empty string on parse failure.
+inline std::string computeAsOfIso(const std::string& settlement_date,
+                                  int entry_day_offset,
+                                  int entry_hour) {
+    std::tm tm = {};
+    if (!parseDateString(settlement_date, tm)) return "";
+
+    std::string entry_date = (entry_day_offset == 0)
+        ? settlement_date
+        : addDaysToDate(settlement_date, entry_day_offset);
+    if (entry_date.empty()) return "";
+
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "%sT%02d:00:00Z", entry_date.c_str(), entry_hour);
+    return buf;
+}
+
 // Get current UTC time as "YYYY-MM-DDTHH".
 inline std::string currentUtcDatetimeHour() {
     auto now = std::chrono::system_clock::now();

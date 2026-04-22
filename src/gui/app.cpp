@@ -14,9 +14,9 @@ namespace predibloom {
 
 App::App()
     : client_(std::make_unique<api::KalshiClient>()),
-      openmeteo_(std::make_unique<api::OpenMeteoClient>()),
+      gribstream_(std::make_unique<api::GribStreamClient>(core::Config::load().gribstream_api_token)),
       service_(std::make_unique<core::MarketService>(*client_)),
-      comparison_service_(std::make_unique<core::WeatherComparisonService>(*client_, *openmeteo_)),
+      comparison_service_(std::make_unique<core::WeatherComparisonService>(*client_, *gribstream_)),
       config_(core::Config::load()) {
     rebuildWidgets();
     fetchMarkets();
@@ -293,7 +293,9 @@ void App::fetchOrderbook(const std::string& ticker) {
             if (series_config && series_config->latitude != 0) {
                 comparison_service_->setLocation(
                     series_config->latitude, series_config->longitude,
-                    series_config->isLowTemp());
+                    series_config->isLowTemp(),
+                    series_config->entry_day_offset,
+                    series_config->effectiveEntryHour());
                 auto comp_result = comparison_service_->getPoint(market);
                 if (comp_result.ok()) {
                     selected_comparison_ = std::move(comp_result.value());
@@ -318,14 +320,14 @@ void App::fetchOrderbook(const std::string& ticker) {
                     snprintf(start_buf, sizeof(start_buf), "%04d-%02d-%02d", year, month, day);
 
                     client_->setCaching(true);
-                    openmeteo_->setCaching(true);
+                    gribstream_->setCaching(true);
                     auto summary_result = comparison_service_->analyze(
                         series_ticker, std::string(start_buf), market_date);
                     if (summary_result.ok()) {
                         selected_comparison_summary_ = std::move(summary_result.value());
                     }
                     client_->setCaching(false);
-                    openmeteo_->setCaching(false);
+                    gribstream_->setCaching(false);
                 }
             }
         }

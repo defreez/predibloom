@@ -7,13 +7,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
+option(BUILD_GUI "Build the raylib-based GUI (requires X11 dev headers on Linux)" ON)
+
 # raylib v5.5
-FetchContent_Declare(
-    raylib
-    GIT_REPOSITORY https://github.com/raysan5/raylib.git
-    GIT_TAG 5.5
-)
-FetchContent_MakeAvailable(raylib)
+if(BUILD_GUI)
+    FetchContent_Declare(
+        raylib
+        GIT_REPOSITORY https://github.com/raysan5/raylib.git
+        GIT_TAG 5.5
+    )
+    FetchContent_MakeAvailable(raylib)
+endif()
 
 # cpp-httplib v0.15.3 (header-only, needs OpenSSL)
 FetchContent_Declare(
@@ -54,7 +58,7 @@ find_package(OpenSSL REQUIRED)
 # Shared core library (API client + service layer)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
-    src/api/openmeteo_client.cpp
+    src/api/gribstream_client.cpp
     src/api/nws_client.cpp
     src/api/http_cache.cpp
     src/core/service.cpp
@@ -78,15 +82,17 @@ target_compile_definitions(predibloom_core PUBLIC
 )
 
 # GUI executable
-add_executable(predibloom
-    src/gui/main.cpp
-    src/gui/app.cpp
-)
+if(BUILD_GUI)
+    add_executable(predibloom
+        src/gui/main.cpp
+        src/gui/app.cpp
+    )
 
-target_link_libraries(predibloom PRIVATE
-    predibloom_core
-    raylib
-)
+    target_link_libraries(predibloom PRIVATE
+        predibloom_core
+        raylib
+    )
+endif()
 
 # CLI executable
 add_executable(predibloom-cli
@@ -113,7 +119,7 @@ enable_testing()
 add_executable(predibloom_tests
     tests/test_result.cpp
     tests/test_types.cpp
-    tests/test_openmeteo_types.cpp
+    tests/test_gribstream_types.cpp
     tests/test_weather_comparison.cpp
     tests/test_config.cpp
     tests/test_formatters.cpp

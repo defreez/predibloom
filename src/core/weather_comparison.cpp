@@ -1,4 +1,5 @@
 #include "weather_comparison.hpp"
+#include "time_utils.hpp"
 #include <cmath>
 #include <algorithm>
 
@@ -6,15 +7,20 @@ namespace predibloom::core {
 
 WeatherComparisonService::WeatherComparisonService(
     api::KalshiClient& kalshi,
-    api::OpenMeteoClient& openmeteo)
+    api::GribStreamClient& gribstream)
     : kalshi_(kalshi)
-    , openmeteo_(openmeteo) {
+    , gribstream_(gribstream) {
 }
 
-void WeatherComparisonService::setLocation(double latitude, double longitude, bool is_low_temp) {
+void WeatherComparisonService::setLocation(double latitude, double longitude,
+                                            bool is_low_temp,
+                                            int entry_day_offset,
+                                            int entry_hour) {
     latitude_ = latitude;
     longitude_ = longitude;
     is_low_temp_ = is_low_temp;
+    entry_day_offset_ = entry_day_offset;
+    entry_hour_ = entry_hour;
 }
 
 api::Result<ComparisonPoint> WeatherComparisonService::getPoint(const api::Market& market) {
@@ -36,23 +42,21 @@ api::Result<ComparisonPoint> WeatherComparisonService::getPoint(const api::Marke
     point.floor_strike = market.floor_strike;
     point.cap_strike = market.cap_strike;
 
-    // Fetch weather data for this date
-    auto actual_result = openmeteo_.getHistoricalWeather(
-        latitude_, longitude_, date, date);
-
+    // Actuals: shortest-lead NBM value for the day.
+    auto actual_result = gribstream_.getActuals(latitude_, longitude_, date);
     if (actual_result.ok()) {
         point.actual_temp = is_low_temp_
-            ? getMinTemperatureForDate(actual_result.value(), date)
-            : getTemperatureForDate(actual_result.value(), date);
+            ? api::getMinTemperatureForDate(actual_result.value(), date)
+            : api::getTemperatureForDate(actual_result.value(), date);
     }
 
-    auto forecast_result = openmeteo_.getHistoricalForecast(
-        latitude_, longitude_, date, date);
-
+    // Forecast: NBM as-of the configured entry moment.
+    std::string as_of = computeAsOfIso(date, entry_day_offset_, entry_hour_);
+    auto forecast_result = gribstream_.getForecast(latitude_, longitude_, date, as_of);
     if (forecast_result.ok()) {
         point.forecast_temp = is_low_temp_
-            ? getMinTemperatureForDate(forecast_result.value(), date)
-            : getTemperatureForDate(forecast_result.value(), date);
+            ? api::getMinTemperatureForDate(forecast_result.value(), date)
+            : api::getTemperatureForDate(forecast_result.value(), date);
     }
 
     return point;
@@ -75,14 +79,7 @@ api::Result<ComparisonSummary> WeatherComparisonService::analyze(
         return markets_result.error();
     }
 
-    // Fetch weather data for the full range
-    auto actual_result = openmeteo_.getHistoricalWeather(
-        latitude_, longitude_, start_date, end_date);
-
-    auto forecast_result = openmeteo_.getHistoricalForecast(
-        latitude_, longitude_, start_date, end_date);
-
-    // Process each market
+    // Process each market; fetch weather per-date so we can use per-day asOf.
     double forecast_error_sum = 0.0;
     int correct_predictions = 0;
     int total_predictions = 0;
@@ -99,24 +96,27 @@ api::Result<ComparisonSummary> WeatherComparisonService::analyze(
         point.date = date;
         point.kalshi_price = market.last_price_cents();
         point.settlement = market.result;
-        // Use API-provided strikes directly
         point.floor_strike = market.floor_strike;
         point.cap_strike = market.cap_strike;
 
-        // Get weather data for this date
+        // Actuals (shortest-lead NBM)
+        auto actual_result = gribstream_.getActuals(latitude_, longitude_, date);
         if (actual_result.ok()) {
             point.actual_temp = is_low_temp_
-                ? getMinTemperatureForDate(actual_result.value(), date)
-                : getTemperatureForDate(actual_result.value(), date);
+                ? api::getMinTemperatureForDate(actual_result.value(), date)
+                : api::getTemperatureForDate(actual_result.value(), date);
             if (point.actual_temp.has_value()) {
                 summary.markets_with_actual++;
             }
         }
 
+        // Forecast (asOf = entry moment)
+        std::string as_of = computeAsOfIso(date, entry_day_offset_, entry_hour_);
+        auto forecast_result = gribstream_.getForecast(latitude_, longitude_, date, as_of);
         if (forecast_result.ok()) {
             point.forecast_temp = is_low_temp_
-                ? getMinTemperatureForDate(forecast_result.value(), date)
-                : getTemperatureForDate(forecast_result.value(), date);
+                ? api::getMinTemperatureForDate(forecast_result.value(), date)
+                : api::getTemperatureForDate(forecast_result.value(), date);
             if (point.forecast_temp.has_value()) {
                 summary.markets_with_forecast++;
             }

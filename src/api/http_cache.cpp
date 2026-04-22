@@ -34,6 +34,11 @@ std::string HttpCache::key(const std::string& host, const std::string& path) {
     return host + path;
 }
 
+std::string HttpCache::key(const std::string& host, const std::string& path, const std::string& body) {
+    size_t body_hash = std::hash<std::string>{}(body);
+    return host + path + "#" + hash_to_hex(body_hash);
+}
+
 std::optional<std::string> HttpCache::get(const std::string& cache_key) {
     std::string path = cache_path(cache_key);
 

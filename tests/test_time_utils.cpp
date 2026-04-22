@@ -332,6 +332,66 @@ TEST(IsWithinEntryWindow, InvalidCurrent) {
 }
 
 // ============================================================
+// computeAsOfIso
+// ============================================================
+
+TEST(ComputeAsOfIso, SameDayHour5) {
+    EXPECT_EQ(computeAsOfIso("2026-04-18", 0, 5), "2026-04-18T05:00:00Z");
+}
+
+TEST(ComputeAsOfIso, PrevDayHour22) {
+    EXPECT_EQ(computeAsOfIso("2026-04-18", -1, 22), "2026-04-17T22:00:00Z");
+}
+
+TEST(ComputeAsOfIso, PrevDayCrossYear) {
+    EXPECT_EQ(computeAsOfIso("2026-01-01", -1, 20), "2025-12-31T20:00:00Z");
+}
+
+TEST(ComputeAsOfIso, InvalidInput) {
+    EXPECT_EQ(computeAsOfIso("bogus", 0, 5), "");
+}
+
+// ============================================================
+// nyMidnightToUtcIso (DST handling)
+// ============================================================
+
+TEST(NyMidnightToUtcIso, WinterIsEst) {
+    // January: EST (UTC-5) — midnight local = 05:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-01-15"), "2025-01-15T05:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, SummerIsEdt) {
+    // July: EDT (UTC-4) — midnight local = 04:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-07-15"), "2025-07-15T04:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayOfSpringForward) {
+    // March 9, 2025 is the 2nd Sunday of March; day begins at midnight EST (05:00Z),
+    // and springs forward at 02:00 local to 03:00 local.
+    EXPECT_EQ(nyMidnightToUtcIso("2025-03-09"), "2025-03-09T05:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayAfterSpringForward) {
+    // March 10, 2025 is already EDT — midnight local = 04:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-03-10"), "2025-03-10T04:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayOfFallBack) {
+    // November 2, 2025 is the 1st Sunday of November; day begins at midnight EDT (04:00Z),
+    // and falls back at 02:00 local to 01:00 local.
+    EXPECT_EQ(nyMidnightToUtcIso("2025-11-02"), "2025-11-02T04:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayAfterFallBack) {
+    // November 3, 2025 is EST — midnight local = 05:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-11-03"), "2025-11-03T05:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, InvalidDate) {
+    EXPECT_EQ(nyMidnightToUtcIso("bad"), "");
+}
+
+// ============================================================
 // currentUtcDatetimeHour (smoke test)
 // ============================================================
 

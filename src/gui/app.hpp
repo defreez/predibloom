@@ -6,7 +6,7 @@
 #include <string>
 #include <queue>
 #include "../api/kalshi_client.hpp"
-#include "../api/openmeteo_client.hpp"
+#include "../api/gribstream_client.hpp"
 #include "../core/service.hpp"
 #include "../core/config.hpp"
 #include "../core/weather_comparison.hpp"
@@ -45,7 +45,7 @@ private:
 
     // Service layer
     std::unique_ptr<api::KalshiClient> client_;
-    std::unique_ptr<api::OpenMeteoClient> openmeteo_;
+    std::unique_ptr<api::GribStreamClient> gribstream_;
     std::unique_ptr<core::MarketService> service_;
     std::unique_ptr<core::WeatherComparisonService> comparison_service_;
     core::Config config_;

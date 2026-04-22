@@ -1,6 +1,6 @@
 #include <CLI/CLI.hpp>
 #include "../api/kalshi_client.hpp"
-#include "../api/openmeteo_client.hpp"
+#include "../api/gribstream_client.hpp"
 #include "../api/nws_client.hpp"
 #include "../core/service.hpp"
 #include "../core/config.hpp"
@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
     auto* backtest_cmd = app.add_subcommand("backtest", "Backtest trading strategy using forecasts");
     auto* predict_cmd = app.add_subcommand("predict", "Predict trade for a given day");
     auto* series_cmd = app.add_subcommand("series", "List configured series with entry hours");
-    auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset by comparing Open-Meteo vs NWS actuals");
+    auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset by comparing GribStream forecasts vs NWS actuals");
     auto* fills_cmd = app.add_subcommand("fills", "Show your trade fills (requires auth)");
     auto* portfolio_cmd = app.add_subcommand("portfolio", "Show current positions and balance (requires auth)");
     auto* portfolio_positions_cmd = portfolio_cmd->add_subcommand("positions", "Show open positions");
@@ -405,10 +405,17 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        predibloom::api::OpenMeteoClient openmeteo;
-        predibloom::core::WeatherComparisonService comparison(client, openmeteo);
+        if (!config.hasGribstream()) {
+            std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
+            return 1;
+        }
+        predibloom::api::GribStreamClient gribstream(config.gribstream_api_token);
+        gribstream.setCaching(true);
+        predibloom::core::WeatherComparisonService comparison(client, gribstream);
         comparison.setLocation(series_config->latitude, series_config->longitude,
-                               series_config->isLowTemp());
+                               series_config->isLowTemp(),
+                               series_config->entry_day_offset,
+                               series_config->effectiveEntryHour());
 
         auto result = comparison.analyze(compare_series, compare_start, compare_end);
         if (!result.ok()) {
@@ -491,7 +498,12 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        predibloom::api::OpenMeteoClient openmeteo;
+        if (!config.hasGribstream()) {
+            std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
+            return 1;
+        }
+        predibloom::api::GribStreamClient gribstream(config.gribstream_api_token);
+        gribstream.setCaching(true);
         predibloom::api::NwsClient nws;
 
         // Get all markets for the series
@@ -537,16 +549,6 @@ int main(int argc, char** argv) {
 
         std::cerr << "Found " << winners.size() << " winning brackets\n";
 
-        // Fetch forecast data from Open-Meteo
-        auto forecast_result = openmeteo.getHistoricalForecast(
-            series_config->latitude, series_config->longitude,
-            winners_start, winners_end);
-
-        // Fetch Open-Meteo actual (ERA5 reanalysis - for comparison)
-        auto openmeteo_actual_result = openmeteo.getHistoricalWeather(
-            series_config->latitude, series_config->longitude,
-            winners_start, winners_end);
-
         // Fetch actual temperatures from NWS CLI (authoritative for Kalshi settlement)
         int start_year = std::stoi(winners_start.substr(0, 4));
         int end_year = std::stoi(winners_end.substr(0, 4));
@@ -566,24 +568,31 @@ int main(int argc, char** argv) {
         std::cerr << "Fetched " << nws_temps.size() << " NWS observations\n";
 
         // Output CSV header
-        std::cout << "timestamp,date,ticker,strike,price_cents,forecast_temp,openmeteo_actual,nws_temp\n";
+        std::cout << "timestamp,date,ticker,strike,price_cents,forecast_temp,gribstream_actual,nws_temp\n";
 
         int processed = 0;
         for (const auto& [date, market] : winners) {
-            // Get forecast and actuals
+            // Get forecast (asOf = entry moment) and actuals (shortest-lead) per date
             std::optional<double> forecast_temp;
-            std::optional<double> openmeteo_actual;
+            std::optional<double> gribstream_actual;
             std::optional<int> nws_temp;
 
+            std::string as_of = predibloom::core::computeAsOfIso(
+                date, series_config->entry_day_offset, series_config->effectiveEntryHour());
+            auto forecast_result = gribstream.getForecast(
+                series_config->latitude, series_config->longitude, date, as_of);
             if (forecast_result.ok()) {
                 forecast_temp = is_low
                     ? predibloom::api::getMinTemperatureForDate(forecast_result.value(), date)
                     : predibloom::api::getTemperatureForDate(forecast_result.value(), date);
             }
-            if (openmeteo_actual_result.ok()) {
-                openmeteo_actual = is_low
-                    ? predibloom::api::getMinTemperatureForDate(openmeteo_actual_result.value(), date)
-                    : predibloom::api::getTemperatureForDate(openmeteo_actual_result.value(), date);
+
+            auto gribstream_actual_result = gribstream.getActuals(
+                series_config->latitude, series_config->longitude, date);
+            if (gribstream_actual_result.ok()) {
+                gribstream_actual = is_low
+                    ? predibloom::api::getMinTemperatureForDate(gribstream_actual_result.value(), date)
+                    : predibloom::api::getTemperatureForDate(gribstream_actual_result.value(), date);
             }
             if (nws_temps.count(date)) {
                 nws_temp = nws_temps.at(date);
@@ -621,8 +630,8 @@ int main(int argc, char** argv) {
                 } else {
                     std::cout << ",";
                 }
-                if (openmeteo_actual) {
-                    std::cout << "," << std::fixed << std::setprecision(1) << *openmeteo_actual;
+                if (gribstream_actual) {
+                    std::cout << "," << std::fixed << std::setprecision(1) << *gribstream_actual;
                 } else {
                     std::cout << ",";
                 }
@@ -667,10 +676,14 @@ int main(int argc, char** argv) {
             }
         }
 
-        predibloom::api::OpenMeteoClient openmeteo;
+        if (!config.hasGribstream()) {
+            std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
+            return 1;
+        }
+        predibloom::api::GribStreamClient gribstream(config.gribstream_api_token);
         predibloom::api::NwsClient nws;
         client.setCaching(true);
-        openmeteo.setCaching(true);
+        gribstream.setCaching(true);
         nws.setCaching(true);
 
         std::cerr << "Backtest parameters:\n";
@@ -791,16 +804,6 @@ int main(int argc, char** argv) {
 
             std::cerr << current_series << ": " << markets_by_date.size() << " trading days\n";
 
-            // Fetch forecast data
-            auto forecast_result = openmeteo.getHistoricalForecast(
-                series_config->latitude, series_config->longitude,
-                backtest_start, backtest_end);
-
-            if (!forecast_result.ok()) {
-                std::cerr << "Error fetching forecasts for " << current_series << ": " << forecast_result.error().message << "\n";
-                continue;
-            }
-
             // Fetch NWS actual data
             bool is_low = series_config->isLowTemp();
             int start_year = std::stoi(backtest_start.substr(0, 4));
@@ -831,7 +834,15 @@ int main(int argc, char** argv) {
 
         // Process each day
         for (const auto& [date, day_markets] : markets_by_date) {
-            // Get forecast for this date
+            // Forecast as-of the entry moment for this date (point-in-time honest backtest)
+            std::string as_of = predibloom::core::computeAsOfIso(
+                date, series_config->entry_day_offset, series_config->effectiveEntryHour());
+            auto forecast_result = gribstream.getForecast(
+                series_config->latitude, series_config->longitude, date, as_of);
+            if (!forecast_result.ok()) {
+                skip.no_forecast++;
+                continue;
+            }
             auto forecast_opt = is_low
                 ? predibloom::api::getMinTemperatureForDate(forecast_result.value(), date)
                 : predibloom::api::getTemperatureForDate(forecast_result.value(), date);
@@ -1125,7 +1136,11 @@ int main(int argc, char** argv) {
 
     // Handle predict command
     if (*predict_cmd) {
-        predibloom::api::OpenMeteoClient openmeteo;
+        if (!config.hasGribstream()) {
+            std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
+            return 1;
+        }
+        predibloom::api::GribStreamClient gribstream(config.gribstream_api_token);
 
         // Build list of series to process
         std::vector<const predibloom::core::TrackedSeries*> series_list;
@@ -1185,10 +1200,9 @@ int main(int argc, char** argv) {
         for (const auto* series_config : series_list) {
             double effective_offset = series_config->offset;
 
-            // Get forecast
-            auto forecast_result = openmeteo.getHistoricalForecast(
-                series_config->latitude, series_config->longitude,
-                predict_date, predict_date);
+            // Get forecast (best/latest run — no asOf for current-day predict)
+            auto forecast_result = gribstream.getForecast(
+                series_config->latitude, series_config->longitude, predict_date);
 
             if (!forecast_result.ok()) {
                 std::cerr << "  " << series_config->label << ": forecast error\n";
@@ -1379,9 +1393,13 @@ int main(int argc, char** argv) {
             }
         }
 
-        predibloom::api::OpenMeteoClient openmeteo;
+        if (!config.hasGribstream()) {
+            std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
+            return 1;
+        }
+        predibloom::api::GribStreamClient gribstream(config.gribstream_api_token);
         predibloom::api::NwsClient nws;
-        openmeteo.setCaching(true);
+        gribstream.setCaching(true);
         nws.setCaching(true);
 
         struct SeriesSummary {
@@ -1400,17 +1418,7 @@ int main(int argc, char** argv) {
             std::cerr << "Calibrating " << series_config->label
                       << " (" << current_series << ", station " << series_config->nws_station << ")...\n";
 
-            // Fetch Open-Meteo historical forecasts
-            auto forecast_result = openmeteo.getHistoricalForecast(
-                series_config->latitude, series_config->longitude,
-                calibrate_start, calibrate_end);
-
-            if (!forecast_result.ok()) {
-                std::cerr << "  Error fetching forecasts: " << forecast_result.error().message << "\n";
-                continue;
-            }
-
-            // Fetch NWS actual data
+            // Fetch NWS actual data (authoritative truth)
             bool is_low = series_config->isLowTemp();
             int start_year = std::stoi(calibrate_start.substr(0, 4));
             int end_year = std::stoi(calibrate_end.substr(0, 4));
@@ -1435,34 +1443,32 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            // Build per-day comparisons
+            // Build per-day comparisons. Fetch forecast per date with asOf = entry moment,
+            // so calibration reflects what would actually have been seen at entry time.
             struct DayComparison {
                 std::string date;
                 double forecast;
                 int nws_actual;
-                double error;  // NWS - OpenMeteo
+                double error;  // NWS - GribStream forecast
             };
             std::vector<DayComparison> days;
 
-            const auto& times = forecast_result.value().daily.time;
-            const auto& temps = is_low
-                ? forecast_result.value().daily.temperature_2m_min
-                : forecast_result.value().daily.temperature_2m_max;
+            for (const auto& [date, nws_actual] : nws_temps) {
+                std::string as_of = predibloom::core::computeAsOfIso(
+                    date, series_config->entry_day_offset, series_config->effectiveEntryHour());
+                auto forecast_result = gribstream.getForecast(
+                    series_config->latitude, series_config->longitude, date, as_of);
+                if (!forecast_result.ok()) continue;
 
-            for (size_t i = 0; i < times.size() && i < temps.size(); i++) {
-                const std::string& date = times[i];
-                double forecast_temp = temps[i];
-
-                if (std::isnan(forecast_temp)) continue;
-                if (date < calibrate_start || date > calibrate_end) continue;
-
-                auto nws_it = nws_temps.find(date);
-                if (nws_it == nws_temps.end()) continue;
+                auto forecast_opt = is_low
+                    ? predibloom::api::getMinTemperatureForDate(forecast_result.value(), date)
+                    : predibloom::api::getTemperatureForDate(forecast_result.value(), date);
+                if (!forecast_opt) continue;
 
                 DayComparison d;
                 d.date = date;
-                d.forecast = forecast_temp;
-                d.nws_actual = nws_it->second;
+                d.forecast = *forecast_opt;
+                d.nws_actual = nws_actual;
                 d.error = static_cast<double>(d.nws_actual) - d.forecast;
                 days.push_back(d);
             }
@@ -1563,7 +1569,7 @@ int main(int argc, char** argv) {
             }
 
             std::cout << std::string(68, '-') << "\n";
-            std::cout << "\nOffset = mean(NWS_actual - OpenMeteo_forecast)\n";
+            std::cout << "\nOffset = mean(NWS_actual - GribStream_forecast)\n";
             std::cout << "Delta = recommended offset - current config offset\n";
         }
     }

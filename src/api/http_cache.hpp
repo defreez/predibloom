@@ -13,8 +13,11 @@ public:
     // Stores response body to cache
     static void put(const std::string& cache_key, const std::string& body);
 
-    // Generate cache key from host and path
+    // Generate cache key from host and path (for GET)
     static std::string key(const std::string& host, const std::string& path);
+
+    // Generate cache key from host, path, and body (for POST)
+    static std::string key(const std::string& host, const std::string& path, const std::string& body);
 };
 
 } // namespace predibloom::api
