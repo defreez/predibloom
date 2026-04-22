@@ -138,3 +138,15 @@ target_compile_definitions(predibloom_tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(predibloom_tests)
+
+# Integration tests (require API credentials)
+add_executable(predibloom_integration_tests
+    tests/test_gribstream_integration.cpp
+)
+
+target_link_libraries(predibloom_integration_tests PRIVATE
+    predibloom_core
+    GTest::gtest_main
+)
+
+gtest_discover_tests(predibloom_integration_tests)
