@@ -17,13 +17,18 @@ constexpr const char* API_HOST = "gribstream.com";
 constexpr const char* API_PATH = "/api/v2/nbm/timeseries";
 }
 
-bool parseGribstreamCsvTemps(const std::string& csv_body, std::vector<double>& out_kelvin) {
+bool parseGribstreamCsvTemps(const std::string& csv_body,
+                              std::vector<double>& out_kelvin,
+                              std::string* out_forecasted_at) {
     out_kelvin.clear();
+    if (out_forecasted_at) out_forecasted_at->clear();
     std::istringstream iss(csv_body);
     std::string line;
 
     // Skip header
     if (!std::getline(iss, line)) return false;
+
+    std::string max_forecasted_at;
 
     while (std::getline(iss, line)) {
         if (line.empty()) continue;
@@ -41,10 +46,27 @@ bool parseGribstreamCsvTemps(const std::string& csv_body, std::vector<double>& o
         try {
             double v = std::stod(tok);
             out_kelvin.push_back(v);
+
+            // Extract forecasted_at from column 0 (first column before first comma)
+            if (out_forecasted_at) {
+                size_t first_comma = line.find(',');
+                if (first_comma != std::string::npos) {
+                    std::string forecasted_at = line.substr(0, first_comma);
+                    // Track the most recent (lexicographically greatest) timestamp
+                    if (forecasted_at > max_forecasted_at) {
+                        max_forecasted_at = forecasted_at;
+                    }
+                }
+            }
         } catch (...) {
             // skip unparseable
         }
     }
+
+    if (out_forecasted_at && !max_forecasted_at.empty()) {
+        *out_forecasted_at = max_forecasted_at;
+    }
+
     return true;
 }
 
@@ -141,12 +163,14 @@ Result<WeatherResponse> GribStreamClient::fetchAggregated(double latitude,
     }
 
     std::vector<double> temps_k;
-    parseGribstreamCsvTemps(csv, temps_k);
+    std::string forecasted_at;
+    parseGribstreamCsvTemps(csv, temps_k, &forecasted_at);
 
     WeatherResponse resp;
     resp.latitude = latitude;
     resp.longitude = longitude;
     resp.timezone = "America/New_York";
+    resp.forecasted_at = forecasted_at;
     resp.daily.time = {date};
 
     if (temps_k.empty()) {

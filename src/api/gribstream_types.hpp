@@ -20,6 +20,7 @@ struct WeatherResponse {
     double latitude = 0;
     double longitude = 0;
     std::string timezone = "America/New_York";
+    std::string forecasted_at;  // ISO timestamp of when forecast was generated
     DailyWeatherData daily;
 };
 
@@ -57,6 +58,10 @@ inline double kelvinToFahrenheit(double kelvin) {
 // Parse a GribStream CSV body (header + rows) and extract the temperature column
 // (last column) as Kelvin values. Ignores the header row. Returns true on success.
 // Rows that cannot be parsed are skipped.
-bool parseGribstreamCsvTemps(const std::string& csv_body, std::vector<double>& out_kelvin);
+// If out_forecasted_at is provided, it will be populated with the most recent
+// (lexicographically greatest) forecasted_at timestamp from column 0.
+bool parseGribstreamCsvTemps(const std::string& csv_body,
+                              std::vector<double>& out_kelvin,
+                              std::string* out_forecasted_at = nullptr);
 
 } // namespace predibloom::api

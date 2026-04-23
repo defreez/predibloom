@@ -196,4 +196,66 @@ inline bool isWithinEntryWindow(const std::string& entry_datetime,
     return diff_hours >= -window_hours && diff_hours <= window_hours;
 }
 
+// Convert UTC ISO timestamp (YYYY-MM-DDTHH:MM:SSZ) to Pacific Time formatted string
+// and compute hours ago. Returns formatted string like "Apr 23 11:00am PT (6 hours ago)"
+// Returns empty string on parse failure.
+inline std::string formatUtcAsPtWithAge(const std::string& utc_iso) {
+    if (utc_iso.size() < 19) return "";
+
+    std::tm utc_tm = {};
+    try {
+        utc_tm.tm_year = std::stoi(utc_iso.substr(0, 4)) - 1900;
+        utc_tm.tm_mon = std::stoi(utc_iso.substr(5, 2)) - 1;
+        utc_tm.tm_mday = std::stoi(utc_iso.substr(8, 2));
+        utc_tm.tm_hour = std::stoi(utc_iso.substr(11, 2));
+        utc_tm.tm_min = std::stoi(utc_iso.substr(14, 2));
+        utc_tm.tm_sec = std::stoi(utc_iso.substr(17, 2));
+    } catch (...) {
+        return "";
+    }
+    utc_tm.tm_isdst = 0;
+    time_t utc_t = timegm(&utc_tm);
+    if (utc_t == (time_t)-1) return "";
+
+    // Convert to PT (use America/Los_Angeles)
+    char* orig_tz = std::getenv("TZ");
+    std::string saved_tz = orig_tz ? orig_tz : "";
+    bool had_tz = orig_tz != nullptr;
+
+    setenv("TZ", "America/Los_Angeles", 1);
+    tzset();
+    std::tm pt_tm = {};
+    localtime_r(&utc_t, &pt_tm);
+
+    if (had_tz) setenv("TZ", saved_tz.c_str(), 1);
+    else unsetenv("TZ");
+    tzset();
+
+    // Format month name
+    static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+
+    // Format hour in 12-hour format
+    int hour12 = pt_tm.tm_hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    const char* ampm = pt_tm.tm_hour >= 12 ? "pm" : "am";
+
+    // Calculate hours ago
+    auto now = std::chrono::system_clock::now();
+    time_t now_t = std::chrono::system_clock::to_time_t(now);
+    int hours_ago = static_cast<int>(std::difftime(now_t, utc_t) / 3600.0);
+
+    char buf[64];
+    if (hours_ago == 1) {
+        std::snprintf(buf, sizeof(buf), "%s %d %d:%02d%s PT (1 hour ago)",
+                      months[pt_tm.tm_mon], pt_tm.tm_mday,
+                      hour12, pt_tm.tm_min, ampm);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%s %d %d:%02d%s PT (%d hours ago)",
+                      months[pt_tm.tm_mon], pt_tm.tm_mday,
+                      hour12, pt_tm.tm_min, ampm, hours_ago);
+    }
+    return buf;
+}
+
 } // namespace predibloom::core

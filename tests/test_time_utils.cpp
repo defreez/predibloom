@@ -403,3 +403,23 @@ TEST(CurrentUtcDatetimeHour, Format) {
     EXPECT_EQ(now[7], '-');
     EXPECT_EQ(now[10], 'T');
 }
+
+// ============================================================
+// formatUtcAsPtWithAge
+// ============================================================
+
+TEST(FormatUtcAsPtWithAge, ValidTimestamp) {
+    // 2026-04-23T18:00:00Z = 11am PT (PDT, UTC-7)
+    std::string result = formatUtcAsPtWithAge("2026-04-23T18:00:00Z");
+    // Should contain "Apr 23" and "11:00am PT"
+    EXPECT_NE(result.find("Apr 23"), std::string::npos);
+    EXPECT_NE(result.find("11:00am PT"), std::string::npos);
+    // Should contain "hours ago" or "hour ago"
+    EXPECT_NE(result.find("ago"), std::string::npos);
+}
+
+TEST(FormatUtcAsPtWithAge, InvalidTimestamp) {
+    EXPECT_EQ(formatUtcAsPtWithAge("bad"), "");
+    EXPECT_EQ(formatUtcAsPtWithAge(""), "");
+    EXPECT_EQ(formatUtcAsPtWithAge("2026-04-23"), "");  // too short
+}

@@ -4,7 +4,6 @@
 #include <optional>
 #include <vector>
 #include <string>
-#include <queue>
 #include "../api/kalshi_client.hpp"
 #include "../api/gribstream_client.hpp"
 #include "../core/service.hpp"
@@ -12,6 +11,7 @@
 #include "../core/weather_comparison.hpp"
 #include "../api/types.hpp"
 #include "../ui/widgets.hpp"
+#include "control_socket.hpp"
 #include "raylib.h"
 
 namespace predibloom {
@@ -40,8 +40,8 @@ private:
     void fetchMarkets();
     void fetchOrderbook(const std::string& ticker);
 
-    void executeCommand(const std::string& cmd_json, std::string& response);
     std::string getStateJson() const;
+    std::string getButtonListJson() const;
 
     // Service layer
     std::unique_ptr<api::KalshiClient> client_;
@@ -69,13 +69,7 @@ private:
     std::string error_message_;
 
     // Control socket
-    int control_socket_ = -1;
-    int client_socket_ = -1;
-    std::string command_buffer_;
-
-    // Pending simulated inputs
-    std::queue<std::string> pending_button_clicks_;
-    std::queue<float> pending_scrolls_;
+    std::unique_ptr<ControlSocket> control_socket_;
 
     // Widget system
     ui::WidgetManager widgets_;

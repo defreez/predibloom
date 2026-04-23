@@ -87,6 +87,7 @@ if(BUILD_GUI)
     add_executable(predibloom
         src/gui/main.cpp
         src/gui/app.cpp
+        src/gui/control_socket.cpp
     )
 
     target_link_libraries(predibloom PRIVATE
@@ -98,6 +99,12 @@ endif()
 # CLI executable
 add_executable(predibloom-cli
     src/cli/main.cpp
+    src/cli/commands/predict.cpp
+    src/cli/commands/backtest.cpp
+    src/cli/commands/calibrate.cpp
+    src/cli/commands/portfolio.cpp
+    src/cli/commands/misc.cpp
+    src/cli/commands/history.cpp
 )
 
 target_link_libraries(predibloom-cli PRIVATE

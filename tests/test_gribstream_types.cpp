@@ -91,6 +91,38 @@ TEST(ParseGribstreamCsvTemps, HandlesCrlfLineEndings) {
     EXPECT_NEAR(out[0], 291.6, 1e-6);
 }
 
+TEST(ParseGribstreamCsvTemps, ExtractsForecastedAt) {
+    std::string csv =
+        "forecasted_at,forecasted_time,lat,lon,name,temp\n"
+        "2025-05-01T06:00:00Z,2025-05-01T12:00:00Z,40.0,-74.0,Home,291.6\n";
+    std::vector<double> out;
+    std::string forecasted_at;
+    ASSERT_TRUE(parseGribstreamCsvTemps(csv, out, &forecasted_at));
+    EXPECT_EQ(forecasted_at, "2025-05-01T06:00:00Z");
+}
+
+TEST(ParseGribstreamCsvTemps, ExtractsMostRecentForecastedAt) {
+    // Multiple rows with different forecasted_at - should return most recent
+    std::string csv =
+        "forecasted_at,forecasted_time,lat,lon,name,temp\n"
+        "2025-05-01T06:00:00Z,2025-05-01T12:00:00Z,40.0,-74.0,Home,291.6\n"
+        "2025-05-01T12:00:00Z,2025-05-01T13:00:00Z,40.0,-74.0,Home,293.1\n"
+        "2025-05-01T06:00:00Z,2025-05-01T14:00:00Z,40.0,-74.0,Home,294.2\n";
+    std::vector<double> out;
+    std::string forecasted_at;
+    ASSERT_TRUE(parseGribstreamCsvTemps(csv, out, &forecasted_at));
+    EXPECT_EQ(forecasted_at, "2025-05-01T12:00:00Z");  // Most recent
+}
+
+TEST(ParseGribstreamCsvTemps, NullForecastedAtPointerDoesNotCrash) {
+    std::string csv =
+        "forecasted_at,forecasted_time,lat,lon,name,temp\n"
+        "2025-05-01T06:00:00Z,2025-05-01T12:00:00Z,40.0,-74.0,Home,291.6\n";
+    std::vector<double> out;
+    ASSERT_TRUE(parseGribstreamCsvTemps(csv, out, nullptr));
+    EXPECT_EQ(out.size(), 1u);
+}
+
 // --- getTemperatureForDate / getMinTemperatureForDate ---
 
 static WeatherResponse makeResponse(const std::string& date, double hi, double lo) {
