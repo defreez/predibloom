@@ -1,6 +1,8 @@
 #include <CLI/CLI.hpp>
 #include "../api/kalshi_client.hpp"
 #include "../api/gribstream_client.hpp"
+#include "../api/local_nbm_client.hpp"
+#include "../api/weather_client.hpp"
 #include "../api/nws_client.hpp"
 #include "../core/service.hpp"
 #include "../core/config.hpp"
@@ -143,6 +145,7 @@ int main(int argc, char** argv) {
     auto* series_cmd = app.add_subcommand("series", "List configured series with entry hours");
     auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset by comparing GribStream forecasts vs NWS actuals");
     auto* fills_cmd = app.add_subcommand("fills", "Show your trade fills (requires auth)");
+    auto* nbm_download_cmd = app.add_subcommand("nbm-download", "Pre-download NBM data from NOAA S3 for backtesting");
     auto* portfolio_cmd = app.add_subcommand("portfolio", "Show current positions and balance (requires auth)");
     auto* portfolio_positions_cmd = portfolio_cmd->add_subcommand("positions", "Show open positions");
     auto* portfolio_settlements_cmd = portfolio_cmd->add_subcommand("settlements", "Show recent settlements");
@@ -322,6 +325,15 @@ int main(int argc, char** argv) {
     fills_cmd->add_option("-f,--format", fills_format, "Output format: table|json|csv")
         ->default_val("table")
         ->check(CLI::IsMember({"table", "json", "csv"}));
+
+    // NBM download command options
+    std::string nbm_start;
+    std::string nbm_end;
+
+    nbm_download_cmd->add_option("--start", nbm_start, "Start date YYYY-MM-DD")
+        ->required();
+    nbm_download_cmd->add_option("--end", nbm_end, "End date YYYY-MM-DD")
+        ->required();
 
     // Require at least one subcommand
     app.require_subcommand(1);
@@ -676,14 +688,21 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (!config.hasGribstream()) {
+        // Check if any series needs GribStream
+        bool needs_gribstream = false;
+        for (const auto& series : backtest_series) {
+            auto* sc = config.findSeries(series);
+            if (sc && sc->weather_source == predibloom::core::WeatherSource::GribStream) {
+                needs_gribstream = true;
+                break;
+            }
+        }
+        if (needs_gribstream && !config.hasGribstream()) {
             std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
             return 1;
         }
-        predibloom::api::GribStreamClient gribstream(config.gribstream_api_token);
         predibloom::api::NwsClient nws;
         client.setCaching(true);
-        gribstream.setCaching(true);
         nws.setCaching(true);
 
         std::cerr << "Backtest parameters:\n";
@@ -778,6 +797,11 @@ int main(int argc, char** argv) {
         for (const auto& current_series : backtest_series) {
             auto* series_config = config.findSeries(current_series);
 
+            // Create weather client for this series
+            auto weather_client = predibloom::api::WeatherClient::create(
+                series_config->weather_source, config.gribstream_api_token);
+            weather_client->setCaching(true);
+
             // Get all markets for this series
             predibloom::api::GetMarketsParams params;
             params.series_ticker = current_series;
@@ -837,7 +861,7 @@ int main(int argc, char** argv) {
             // Forecast as-of the entry moment for this date (point-in-time honest backtest)
             std::string as_of = predibloom::core::computeAsOfIso(
                 date, series_config->entry_day_offset, series_config->effectiveEntryHour());
-            auto forecast_result = gribstream.getForecast(
+            auto forecast_result = weather_client->getForecast(
                 series_config->latitude, series_config->longitude, date, as_of);
             if (!forecast_result.ok()) {
                 skip.no_forecast++;
@@ -1136,12 +1160,6 @@ int main(int argc, char** argv) {
 
     // Handle predict command
     if (*predict_cmd) {
-        if (!config.hasGribstream()) {
-            std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
-            return 1;
-        }
-        predibloom::api::GribStreamClient gribstream(config.gribstream_api_token);
-
         // Build list of series to process
         std::vector<const predibloom::core::TrackedSeries*> series_list;
         if (!predict_series.empty()) {
@@ -1164,6 +1182,19 @@ int main(int argc, char** argv) {
 
         if (series_list.empty()) {
             std::cerr << "No series configured with weather params\n";
+            return 1;
+        }
+
+        // Check if any series needs GribStream
+        bool needs_gribstream = false;
+        for (const auto* sc : series_list) {
+            if (sc->weather_source == predibloom::core::WeatherSource::GribStream) {
+                needs_gribstream = true;
+                break;
+            }
+        }
+        if (needs_gribstream && !config.hasGribstream()) {
+            std::cerr << "GribStream API token not configured. Add gribstream_api_token to ~/.config/predibloom/auth.json\n";
             return 1;
         }
 
@@ -1200,8 +1231,12 @@ int main(int argc, char** argv) {
         for (const auto* series_config : series_list) {
             double effective_offset = series_config->offset;
 
+            // Create weather client for this series
+            auto weather_client = predibloom::api::WeatherClient::create(
+                series_config->weather_source, config.gribstream_api_token);
+
             // Get forecast (best/latest run — no asOf for current-day predict)
-            auto forecast_result = gribstream.getForecast(
+            auto forecast_result = weather_client->getForecast(
                 series_config->latitude, series_config->longitude, predict_date);
 
             if (!forecast_result.ok()) {
@@ -1789,6 +1824,70 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Handle nbm-download command
+    if (*nbm_download_cmd) {
+        // Find all series configured for local_nbm
+        std::vector<const predibloom::core::TrackedSeries*> nbm_series;
+        for (const auto& tab : config.tabs) {
+            for (const auto& sc : tab.series) {
+                if (sc.latitude != 0 && sc.weather_source == predibloom::core::WeatherSource::LocalNbm) {
+                    nbm_series.push_back(&sc);
+                }
+            }
+        }
+
+        if (nbm_series.empty()) {
+            std::cerr << "No series configured with weather_source: local_nbm\n";
+            std::cerr << "Add \"weather_source\": \"local_nbm\" to series in config.json\n";
+            return 1;
+        }
+
+        std::cerr << "Downloading NBM data for " << nbm_series.size() << " cities from "
+                  << nbm_start << " to " << nbm_end << "\n";
+
+        predibloom::api::LocalNbmClient nbm_client;
+        int total = 0;
+        int success = 0;
+
+        // Generate all dates in range
+        std::vector<std::string> dates;
+        std::string current = nbm_start;
+        while (current <= nbm_end) {
+            dates.push_back(current);
+            current = predibloom::core::addDaysToDate(current, 1);
+            if (current.empty()) break;
+        }
+
+        std::cerr << "Date range: " << dates.size() << " days\n\n";
+
+        for (const auto* sc : nbm_series) {
+            std::cerr << sc->label << " (" << sc->series_ticker << ")\n";
+
+            int city_success = 0;
+            for (const auto& date : dates) {
+                total++;
+                std::string as_of = predibloom::core::computeAsOfIso(
+                    date, sc->entry_day_offset, sc->effectiveEntryHour());
+
+                auto result = nbm_client.getForecast(sc->latitude, sc->longitude, date, as_of);
+                if (result.ok()) {
+                    success++;
+                    city_success++;
+                    std::cerr << ".";
+                } else {
+                    std::cerr << "x";
+                }
+            }
+            std::cerr << " " << city_success << "/" << dates.size() << "\n";
+        }
+
+        std::cerr << "\nTotal: " << success << "/" << total << " forecasts downloaded\n";
+        if (success < total) {
+            std::cerr << "Note: NOAA S3 only retains ~10 days of NBM data. "
+                      << "Older dates are not available.\n";
+        }
+    }
+
     // Handle series command
     if (*series_cmd) {
         std::cout << std::left << std::setw(16) << "Ticker"
@@ -1796,8 +1895,9 @@ int main(int argc, char** argv) {
                   << std::right << std::setw(8) << "Offset"
                   << "  " << std::left << std::setw(14) << "Entry (PT)"
                   << std::setw(6) << "NWS"
+                  << "  " << std::left << std::setw(10) << "Source"
                   << "\n";
-        std::cout << std::string(66, '-') << "\n";
+        std::cout << std::string(80, '-') << "\n";
 
         for (const auto& tab : config.tabs) {
             for (const auto& s : tab.series) {
@@ -1819,11 +1919,15 @@ int main(int argc, char** argv) {
                 char entry_buf[32];
                 snprintf(entry_buf, sizeof(entry_buf), "%d%s%s", pt12, pt_ampm.c_str(), day_note.c_str());
 
+                std::string source = (s.weather_source == predibloom::core::WeatherSource::LocalNbm)
+                    ? "local_nbm" : "gribstream";
+
                 std::cout << std::left << std::setw(16) << s.series_ticker
                           << std::setw(20) << s.label
                           << std::right << std::setw(8) << offset_buf
                           << "  " << std::left << std::setw(14) << entry_buf
                           << std::setw(6) << s.nws_station
+                          << "  " << std::left << std::setw(10) << source
                           << "\n";
             }
         }

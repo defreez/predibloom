@@ -59,6 +59,7 @@ find_package(OpenSSL REQUIRED)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
     src/api/gribstream_client.cpp
+    src/api/local_nbm_client.cpp
     src/api/nws_client.cpp
     src/api/http_cache.cpp
     src/core/service.cpp
@@ -120,6 +121,7 @@ add_executable(predibloom_tests
     tests/test_result.cpp
     tests/test_types.cpp
     tests/test_gribstream_types.cpp
+    tests/test_local_nbm_client.cpp
     tests/test_weather_comparison.cpp
     tests/test_config.cpp
     tests/test_formatters.cpp

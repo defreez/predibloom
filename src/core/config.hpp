@@ -10,6 +10,12 @@ inline bool isLowTempSeries(const std::string& ticker) {
     return ticker.find("KXLOWT") == 0;
 }
 
+// Weather data source options
+enum class WeatherSource {
+    GribStream,  // Use GribStream API (requires token)
+    LocalNbm     // Use local NBM from NOAA S3 (requires Python + dependencies)
+};
+
 struct TrackedSeries {
     std::string series_ticker;
     std::string label;
@@ -18,9 +24,10 @@ struct TrackedSeries {
     double latitude = 0;
     double longitude = 0;
     std::string nws_station;
-    double offset = 2.0;  // Calibration offset added to GribStream forecast to align with NWS settlement
+    double offset = 2.0;  // Calibration offset added to forecast to align with NWS settlement
     int entry_hour = -1;   // UTC hour for backtest entry (-1 = use default: 4 UTC)
     int entry_day_offset = 0;  // 0 = same UTC day as settlement, -1 = day before
+    WeatherSource weather_source = WeatherSource::GribStream;  // Which weather API to use
 
     bool isLowTemp() const { return isLowTempSeries(series_ticker); }
 

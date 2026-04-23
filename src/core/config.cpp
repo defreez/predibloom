@@ -62,6 +62,14 @@ Config Config::loadFromFile(const std::string& path) {
                         if (series_json.contains("entry_day_offset")) {
                             ts.entry_day_offset = series_json["entry_day_offset"];
                         }
+                        if (series_json.contains("weather_source")) {
+                            std::string ws = series_json["weather_source"];
+                            if (ws == "local_nbm") {
+                                ts.weather_source = WeatherSource::LocalNbm;
+                            } else {
+                                ts.weather_source = WeatherSource::GribStream;
+                            }
+                        }
                         tab.series.push_back(ts);
                     }
                     config.tabs.push_back(tab);
