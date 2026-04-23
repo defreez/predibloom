@@ -332,6 +332,66 @@ TEST(IsWithinEntryWindow, InvalidCurrent) {
 }
 
 // ============================================================
+// computeAsOfIso
+// ============================================================
+
+TEST(ComputeAsOfIso, SameDayHour5) {
+    EXPECT_EQ(computeAsOfIso("2026-04-18", 0, 5), "2026-04-18T05:00:00Z");
+}
+
+TEST(ComputeAsOfIso, PrevDayHour22) {
+    EXPECT_EQ(computeAsOfIso("2026-04-18", -1, 22), "2026-04-17T22:00:00Z");
+}
+
+TEST(ComputeAsOfIso, PrevDayCrossYear) {
+    EXPECT_EQ(computeAsOfIso("2026-01-01", -1, 20), "2025-12-31T20:00:00Z");
+}
+
+TEST(ComputeAsOfIso, InvalidInput) {
+    EXPECT_EQ(computeAsOfIso("bogus", 0, 5), "");
+}
+
+// ============================================================
+// nyMidnightToUtcIso (DST handling)
+// ============================================================
+
+TEST(NyMidnightToUtcIso, WinterIsEst) {
+    // January: EST (UTC-5) — midnight local = 05:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-01-15"), "2025-01-15T05:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, SummerIsEdt) {
+    // July: EDT (UTC-4) — midnight local = 04:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-07-15"), "2025-07-15T04:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayOfSpringForward) {
+    // March 9, 2025 is the 2nd Sunday of March; day begins at midnight EST (05:00Z),
+    // and springs forward at 02:00 local to 03:00 local.
+    EXPECT_EQ(nyMidnightToUtcIso("2025-03-09"), "2025-03-09T05:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayAfterSpringForward) {
+    // March 10, 2025 is already EDT — midnight local = 04:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-03-10"), "2025-03-10T04:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayOfFallBack) {
+    // November 2, 2025 is the 1st Sunday of November; day begins at midnight EDT (04:00Z),
+    // and falls back at 02:00 local to 01:00 local.
+    EXPECT_EQ(nyMidnightToUtcIso("2025-11-02"), "2025-11-02T04:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, DayAfterFallBack) {
+    // November 3, 2025 is EST — midnight local = 05:00Z
+    EXPECT_EQ(nyMidnightToUtcIso("2025-11-03"), "2025-11-03T05:00:00Z");
+}
+
+TEST(NyMidnightToUtcIso, InvalidDate) {
+    EXPECT_EQ(nyMidnightToUtcIso("bad"), "");
+}
+
+// ============================================================
 // currentUtcDatetimeHour (smoke test)
 // ============================================================
 
@@ -342,4 +402,24 @@ TEST(CurrentUtcDatetimeHour, Format) {
     EXPECT_EQ(now[4], '-');
     EXPECT_EQ(now[7], '-');
     EXPECT_EQ(now[10], 'T');
+}
+
+// ============================================================
+// formatUtcAsPtWithAge
+// ============================================================
+
+TEST(FormatUtcAsPtWithAge, ValidTimestamp) {
+    // 2026-04-23T18:00:00Z = 11am PT (PDT, UTC-7)
+    std::string result = formatUtcAsPtWithAge("2026-04-23T18:00:00Z");
+    // Should contain "Apr 23" and "11:00am PT"
+    EXPECT_NE(result.find("Apr 23"), std::string::npos);
+    EXPECT_NE(result.find("11:00am PT"), std::string::npos);
+    // Should contain "hours ago" or "hour ago"
+    EXPECT_NE(result.find("ago"), std::string::npos);
+}
+
+TEST(FormatUtcAsPtWithAge, InvalidTimestamp) {
+    EXPECT_EQ(formatUtcAsPtWithAge("bad"), "");
+    EXPECT_EQ(formatUtcAsPtWithAge(""), "");
+    EXPECT_EQ(formatUtcAsPtWithAge("2026-04-23"), "");  // too short
 }

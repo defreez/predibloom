@@ -3,7 +3,7 @@
 #include "../api/result.hpp"
 #include "../api/types.hpp"
 #include "../api/kalshi_client.hpp"
-#include "../api/openmeteo_client.hpp"
+#include "../api/gribstream_client.hpp"
 #include <string>
 #include <vector>
 #include <optional>
@@ -15,7 +15,7 @@ struct ComparisonPoint {
     std::string date;
     std::string market_ticker;
     double kalshi_price;        // Market implied probability (last price in cents)
-    std::optional<double> forecast_temp;  // What Open-Meteo predicted
+    std::optional<double> forecast_temp;  // What GribStream predicted (asOf entry time)
     std::optional<double> actual_temp;    // What actually happened
     std::string settlement;     // "yes", "no", or "" if not settled
 
@@ -78,10 +78,14 @@ inline bool wouldSettleYes(double actual_temp, std::optional<int> floor, std::op
 
 class WeatherComparisonService {
 public:
-    WeatherComparisonService(api::KalshiClient& kalshi, api::OpenMeteoClient& openmeteo);
+    WeatherComparisonService(api::KalshiClient& kalshi, api::GribStreamClient& gribstream);
 
-    // Set coordinates and whether this is a low-temp series
-    void setLocation(double latitude, double longitude, bool is_low_temp = false);
+    // Set coordinates, low-temp flag, and the backtest-entry params used to
+    // compute the per-date GribStream `asOf` value.
+    void setLocation(double latitude, double longitude,
+                     bool is_low_temp = false,
+                     int entry_day_offset = 0,
+                     int entry_hour = 4);
 
     // Analyze a series over a date range
     api::Result<ComparisonSummary> analyze(
@@ -94,10 +98,12 @@ public:
 
 private:
     api::KalshiClient& kalshi_;
-    api::OpenMeteoClient& openmeteo_;
+    api::GribStreamClient& gribstream_;
     double latitude_ = 0;
     double longitude_ = 0;
     bool is_low_temp_ = false;
+    int entry_day_offset_ = 0;
+    int entry_hour_ = 4;
 };
 
 } // namespace predibloom::core
