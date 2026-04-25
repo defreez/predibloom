@@ -600,6 +600,7 @@ def _download_and_extract_temp(cycle_date: str, cycle_hour: int,
     """Download GRIB2, extract 2m temp to NetCDF4, update index.
 
     Returns path to created NetCDF4 file, or None on failure.
+    Returns "skip" (string) if file exists but has no 2t variable.
     """
     import numpy as np
 
@@ -644,8 +645,9 @@ def _download_and_extract_temp(cycle_date: str, cycle_hour: int,
                     break
 
             if temp_msg is None:
-                print(f"Warning: No 2t variable in {s3_path}", file=sys.stderr)
-                return None
+                # Not a failure - this hour just doesn't have 2t (normal for hours > 36)
+                gribs.close()
+                return "skip"
 
             # Extract data
             data = temp_msg.values
@@ -726,7 +728,8 @@ def capture_cycle(cycle_date: str, cycle_hour: int, base_dir: Path,
     Returns dict with counts: {"success": N, "failed": N, "skipped": N}
     """
     if forecast_hours is None:
-        forecast_hours = list(range(1, NBM_MAX_FORECAST_HOUR + 1))
+        # Default to hours 1-36 (all hours with 2m temperature)
+        forecast_hours = list(range(1, 37))
 
     result = {"success": 0, "failed": 0, "skipped": 0}
     total = len(forecast_hours)
@@ -739,7 +742,11 @@ def capture_cycle(cycle_date: str, cycle_hour: int, base_dir: Path,
         else:
             path = _download_and_extract_temp(cycle_date, cycle_hour, fhr,
                                                base_dir, index_db)
-            if path:
+            if path == "skip":
+                # Hour doesn't have 2t variable (normal for hours > 36)
+                result["skipped"] += 1
+                status = "no2t"
+            elif path:
                 result["success"] += 1
                 status = "ok"
             else:
@@ -930,14 +937,16 @@ def cmd_capture(args: argparse.Namespace) -> int:
     base_dir = Path(args.base_dir) if args.base_dir else DEFAULT_NBM_BASE
     index_db = base_dir / "index.db"
 
-    # Parse forecast hours if specified
-    forecast_hours = None
+    # Parse forecast hours if specified (default: 1-36, the hours with 2t)
     if args.forecast_hours:
         if "-" in args.forecast_hours:
             start, end = args.forecast_hours.split("-")
             forecast_hours = list(range(int(start), int(end) + 1))
         else:
             forecast_hours = [int(x) for x in args.forecast_hours.split(",")]
+    else:
+        # Default to hours 1-36 which all have 2m temperature
+        forecast_hours = list(range(1, 37))
 
     cycles_to_capture = []
 
@@ -1094,7 +1103,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_capture.add_argument("--cycle", type=int, choices=NBM_CYCLES,
                            help="Cycle hour (1, 7, 13, or 19). If omitted, captures all cycles.")
     p_capture.add_argument("--forecast-hours", type=str,
-                           help="Forecast hours: '1-264' or '1,2,3'. Default: all (1-264)")
+                           help="Forecast hours: '1-264' or '1,2,3'. Default: 1-36 (all hours with 2t)")
     p_capture.add_argument("--base-dir", type=str, default="")
     _add_format_arg(p_capture)
 
