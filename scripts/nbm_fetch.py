@@ -199,29 +199,34 @@ def s3_grib_path(cycle_date: str, cycle_hour: int, forecast_hour: int) -> str:
 def fetch_nbm_temps(cycle_date: str, cycle_hour: int, forecast_hour: int,
                     lat: float, lon: float) -> Optional[float]:
     """Fetch 2m temperature (Kelvin) from a single NBM GRIB2 file, or None on failure."""
+    import numpy as np
+
+    try:
+        import pygrib
+    except ImportError as e:
+        print(f"Warning: pygrib not installed: {e}", file=sys.stderr)
+        return None
+
     s3_path = s3_grib_path(cycle_date, cycle_hour, forecast_hour)
     try:
         s3fs_mod = _require_s3fs()
-        xr = _require_xarray()
         fs = s3fs_mod.S3FileSystem(anon=True)
         with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
             fs.get(s3_path, tmp_path)
-            ds = xr.open_dataset(
-                tmp_path,
-                engine="cfgrib",
-                backend_kwargs={
-                    "filter_by_keys": {
-                        "typeOfLevel": "heightAboveGround",
-                        "level": 2,
-                        "shortName": "2t",
-                    }
-                },
-            )
-            temp = ds["t2m"].sel(latitude=lat, longitude=lon, method="nearest").values
-            return float(temp)
+            gribs = pygrib.open(tmp_path)
+            for msg in gribs:
+                if (msg.shortName == "2t" and
+                    msg.typeOfLevel == "heightAboveGround" and
+                    msg.level == 2):
+                    data = msg.values
+                    lats, lons = msg.latlons()
+                    dist = np.sqrt((lats - lat)**2 + (lons - lon)**2)
+                    idx = np.unravel_index(np.argmin(dist), dist.shape)
+                    return float(data[idx])
+            return None
         finally:
             os.unlink(tmp_path)
     except Exception as e:
