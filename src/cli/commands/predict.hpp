@@ -10,6 +10,7 @@ struct PredictOptions {
     std::string series;      // Optional series ticker filter
     std::string date;        // Date to predict (YYYY-MM-DD)
     double margin = 2.0;     // Min margin from bracket edge (°F)
+    double min_price = 5.0;  // Min price to consider (cents)
     double max_price = 40.0; // Max price to pay (cents)
 };
 

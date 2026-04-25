@@ -55,11 +55,19 @@ FetchContent_MakeAvailable(googletest)
 # Find OpenSSL for cpp-httplib HTTPS support
 find_package(OpenSSL REQUIRED)
 
+# Find SQLite3 for NBM cache
+find_package(SQLite3 REQUIRED)
+
+# Find netCDF for NBM grid files
+find_package(netCDF REQUIRED)
+
 # Shared core library (API client + service layer)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
     src/api/gribstream_client.cpp
     src/api/local_nbm_client.cpp
+    src/api/nbm_grid_reader.cpp
+    src/api/forecast_db.cpp
     src/api/nws_client.cpp
     src/api/http_cache.cpp
     src/core/service.cpp
@@ -76,6 +84,8 @@ target_link_libraries(predibloom_core PUBLIC
     nlohmann_json::nlohmann_json
     OpenSSL::SSL
     OpenSSL::Crypto
+    SQLite3::SQLite3
+    netCDF::netcdf
 )
 
 target_compile_definitions(predibloom_core PUBLIC
@@ -104,6 +114,7 @@ add_executable(predibloom-cli
     src/cli/commands/calibrate.cpp
     src/cli/commands/portfolio.cpp
     src/cli/commands/misc.cpp
+    src/cli/commands/nbm.cpp
     src/cli/commands/history.cpp
 )
 
@@ -143,6 +154,7 @@ target_link_libraries(predibloom_tests PRIVATE
 
 target_compile_definitions(predibloom_tests PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/test_data"
+    NBM_SCRIPT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/scripts/nbm_fetch.py"
 )
 
 include(GoogleTest)

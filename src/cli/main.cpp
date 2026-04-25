@@ -10,6 +10,7 @@
 #include "commands/calibrate.hpp"
 #include "commands/portfolio.hpp"
 #include "commands/misc.hpp"
+#include "commands/nbm.hpp"
 #include "commands/history.hpp"
 #include <iostream>
 
@@ -30,7 +31,16 @@ int main(int argc, char** argv) {
     auto* series_cmd = app.add_subcommand("series", "List configured series");
     auto* calibrate_cmd = app.add_subcommand("calibrate", "Calibrate forecast offset");
     auto* fills_cmd = app.add_subcommand("fills", "Show trade fills (requires auth)");
-    auto* nbm_download_cmd = app.add_subcommand("nbm-download", "Pre-download NBM data");
+    auto* nbm_cmd = app.add_subcommand("nbm", "NBM weather data");
+    auto* nbm_download_cmd  = nbm_cmd->add_subcommand("download",  "Bulk download per config");
+    auto* nbm_list_cmd      = nbm_cmd->add_subcommand("list",      "List cached forecasts");
+    auto* nbm_remote_cmd    = nbm_cmd->add_subcommand("remote",    "List S3 availability");
+    auto* nbm_fetch_cmd     = nbm_cmd->add_subcommand("fetch",     "Ad-hoc single fetch");
+    auto* nbm_inventory_cmd = nbm_cmd->add_subcommand("inventory", "GRIB2 variable inventory");
+    auto* nbm_capture_cmd   = nbm_cmd->add_subcommand("capture",   "Capture full cycle to NetCDF4");
+    auto* nbm_capture_missing_cmd = nbm_cmd->add_subcommand("capture-missing", "Download missing cycles");
+    auto* nbm_cleanup_cmd   = nbm_cmd->add_subcommand("cleanup",   "Delete old grid files");
+    auto* nbm_grids_cmd     = nbm_cmd->add_subcommand("grids",     "List captured grids");
     auto* portfolio_cmd = app.add_subcommand("portfolio", "Show portfolio (requires auth)");
     auto* portfolio_positions_cmd = portfolio_cmd->add_subcommand("positions", "Show open positions");
     auto* portfolio_settlements_cmd = portfolio_cmd->add_subcommand("settlements", "Show settlements");
@@ -104,10 +114,11 @@ int main(int argc, char** argv) {
 
     // Predict command options
     std::string predict_series, predict_date;
-    double predict_margin = 2.0, predict_max_price = 40.0;
+    double predict_margin = 2.0, predict_min_price = 5.0, predict_max_price = 40.0;
     predict_cmd->add_option("-s,--series", predict_series, "Series ticker");
     predict_cmd->add_option("-d,--date", predict_date, "Date YYYY-MM-DD")->required();
     predict_cmd->add_option("--margin", predict_margin, "Min margin (°F)")->default_val(2.0);
+    predict_cmd->add_option("--min-price", predict_min_price, "Min price (cents)")->default_val(5.0);
     predict_cmd->add_option("--max-price", predict_max_price, "Max price (cents)")->default_val(40.0);
 
     // Calibrate command options
@@ -126,10 +137,78 @@ int main(int argc, char** argv) {
     fills_cmd->add_option("-n,--limit", fills_limit, "Number of results")->default_val(100)->check(CLI::Range(1, 1000));
     fills_cmd->add_option("-f,--format", fills_format, "Output format")->default_val("table")->check(CLI::IsMember({"table", "json", "csv"}));
 
-    // NBM download command options
+    // NBM subcommand options
     std::string nbm_start, nbm_end;
     nbm_download_cmd->add_option("--start", nbm_start, "Start date YYYY-MM-DD")->required();
     nbm_download_cmd->add_option("--end", nbm_end, "End date YYYY-MM-DD")->required();
+
+    std::string nbm_list_date, nbm_list_lat, nbm_list_lon, nbm_list_format = "table";
+    nbm_list_cmd->add_option("--date", nbm_list_date, "Filter by date YYYY-MM-DD");
+    nbm_list_cmd->add_option("--lat", nbm_list_lat, "Filter by latitude");
+    nbm_list_cmd->add_option("--lon", nbm_list_lon, "Filter by longitude");
+    nbm_list_cmd->add_option("-f,--format", nbm_list_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    std::string nbm_remote_date, nbm_remote_format = "table";
+    int nbm_remote_days = 10;
+    auto* nbm_remote_date_opt = nbm_remote_cmd->add_option("--date", nbm_remote_date,
+        "List only this date YYYY-MM-DD");
+    nbm_remote_cmd->add_option("--days", nbm_remote_days,
+        "Number of most-recent days to list (default 10)")
+        ->excludes(nbm_remote_date_opt);
+    nbm_remote_cmd->add_option("-f,--format", nbm_remote_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    double nbm_fetch_lat = 0, nbm_fetch_lon = 0;
+    std::string nbm_fetch_date, nbm_fetch_asof;
+    bool nbm_fetch_force = false;
+    nbm_fetch_cmd->add_option("--lat", nbm_fetch_lat, "Latitude")->required();
+    nbm_fetch_cmd->add_option("--lon", nbm_fetch_lon, "Longitude")->required();
+    nbm_fetch_cmd->add_option("--date", nbm_fetch_date, "Target date YYYY-MM-DD")->required();
+    nbm_fetch_cmd->add_option("--as-of", nbm_fetch_asof, "Point-in-time constraint (ISO-8601 UTC)");
+    nbm_fetch_cmd->add_flag("--force", nbm_fetch_force, "Bypass cache (re-download)");
+
+    std::string nbm_inv_date, nbm_inv_format = "table";
+    int nbm_inv_cycle = 19, nbm_inv_fhr = 1;
+    nbm_inventory_cmd->add_option("--date", nbm_inv_date, "Cycle date YYYY-MM-DD")->required();
+    nbm_inventory_cmd->add_option("--cycle", nbm_inv_cycle, "Cycle hour (1, 7, 13, or 19)")
+        ->required()->check(CLI::IsMember({1, 7, 13, 19}));
+    nbm_inventory_cmd->add_option("--forecast-hour", nbm_inv_fhr, "Forecast hour (default 1)")
+        ->default_val(1);
+    nbm_inventory_cmd->add_option("-f,--format", nbm_inv_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    // nbm capture options
+    std::string nbm_capture_date, nbm_capture_fhrs, nbm_capture_format = "table";
+    int nbm_capture_cycle = -1;
+    nbm_capture_cmd->add_option("--date", nbm_capture_date, "Cycle date YYYY-MM-DD")->required();
+    nbm_capture_cmd->add_option("--cycle", nbm_capture_cycle, "Cycle hour (1, 7, 13, or 19)")
+        ->check(CLI::IsMember({1, 7, 13, 19}));
+    nbm_capture_cmd->add_option("--forecast-hours", nbm_capture_fhrs,
+        "Forecast hours: '1-264' or '1,2,3'. Default: all");
+    nbm_capture_cmd->add_option("-f,--format", nbm_capture_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    // nbm capture-missing options
+    int nbm_capture_missing_days = 10;
+    std::string nbm_capture_missing_format = "table";
+    nbm_capture_missing_cmd->add_option("--days", nbm_capture_missing_days,
+        "How many days back to scan S3 (default 10)")->default_val(10);
+    nbm_capture_missing_cmd->add_option("-f,--format", nbm_capture_missing_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    // nbm cleanup options
+    int nbm_cleanup_older_than = 30;
+    std::string nbm_cleanup_format = "table";
+    nbm_cleanup_cmd->add_option("--older-than", nbm_cleanup_older_than,
+        "Delete files older than N days (default 30)")->default_val(30);
+    nbm_cleanup_cmd->add_option("-f,--format", nbm_cleanup_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    // nbm grids options
+    std::string nbm_grids_format = "table";
+    nbm_grids_cmd->add_option("-f,--format", nbm_grids_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
 
     app.require_subcommand(1);
     CLI11_PARSE(app, argc, argv);
@@ -229,6 +308,7 @@ int main(int argc, char** argv) {
         opts.series = predict_series;
         opts.date = predict_date;
         opts.margin = predict_margin;
+        opts.min_price = predict_min_price;
         opts.max_price = predict_max_price;
         return predibloom::cli::runPredict(opts, config, client);
     }
@@ -255,9 +335,19 @@ int main(int argc, char** argv) {
         return predibloom::cli::runPortfolioBalance(config, client);
     }
 
-    // Handle nbm-download command
-    if (*nbm_download_cmd) {
-        return predibloom::cli::runNbmDownload(config, nbm_start, nbm_end);
+    // Handle nbm subcommand
+    if (*nbm_cmd) {
+        if (*nbm_download_cmd)  return predibloom::cli::runNbmDownload(config, nbm_start, nbm_end);
+        if (*nbm_list_cmd)      return predibloom::cli::runNbmList(nbm_list_date, nbm_list_lat, nbm_list_lon, nbm_list_format);
+        if (*nbm_remote_cmd)    return predibloom::cli::runNbmRemote(nbm_remote_date, nbm_remote_days, "", nbm_remote_format);
+        if (*nbm_fetch_cmd)     return predibloom::cli::runNbmFetch(nbm_fetch_lat, nbm_fetch_lon, nbm_fetch_date, nbm_fetch_asof, nbm_fetch_force);
+        if (*nbm_inventory_cmd) return predibloom::cli::runNbmInventory(nbm_inv_date, nbm_inv_cycle, nbm_inv_fhr, nbm_inv_format);
+        if (*nbm_capture_cmd) return predibloom::cli::runNbmCapture(nbm_capture_date, nbm_capture_cycle, nbm_capture_fhrs, nbm_capture_format);
+        if (*nbm_capture_missing_cmd) return predibloom::cli::runNbmCaptureMissing(nbm_capture_missing_days, nbm_capture_missing_format);
+        if (*nbm_cleanup_cmd) return predibloom::cli::runNbmCleanup(nbm_cleanup_older_than, nbm_cleanup_format);
+        if (*nbm_grids_cmd) return predibloom::cli::runNbmGrids(nbm_grids_format);
+        std::cerr << "nbm requires a subcommand (download|list|remote|fetch|inventory|capture|capture-missing|cleanup|grids)\n";
+        return 1;
     }
 
     // Handle series command

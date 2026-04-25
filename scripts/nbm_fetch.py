@@ -27,6 +27,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -103,40 +104,114 @@ def _require_xarray():
 NBM_CYCLES = [1, 7, 13, 19]
 NBM_BUCKET = "noaa-nbm-grib2-pds"
 
-DEFAULT_CACHE_DIR = Path(os.getenv("NBM_CACHE_DIR", str(Path.home() / ".cache/predibloom/nbm")))
-DEFAULT_GRIB_CACHE_DIR = DEFAULT_CACHE_DIR / "grib2"
+DEFAULT_DB_PATH = Path(os.getenv("NBM_DB_PATH", str(Path.home() / ".cache/predibloom/forecasts.db")))
+DEFAULT_GRIB_CACHE_DIR = Path(os.getenv("NBM_GRIB_DIR", str(Path.home() / ".cache/predibloom/grib2")))
+DEFAULT_NBM_BASE = Path(os.getenv("NBM_BASE_DIR", str(Path.home() / ".cache/predibloom/nbm")))
+DEFAULT_GRID_INDEX_DB = DEFAULT_NBM_BASE / "index.db"
 
 # Module-level pointer used by fetch_daily_temps() and friends; mutated by the
-# fetch command handler when --cache-dir is supplied.
-CACHE_DIR = DEFAULT_CACHE_DIR
+# fetch command handler when --db-path is supplied.
+DB_PATH = DEFAULT_DB_PATH
 
 
-def get_cache_path(date: str, cycle: int, lat: float, lon: float, cache_dir: Path = None) -> Path:
-    """Generate cache file path for a specific forecast."""
-    base = cache_dir if cache_dir is not None else CACHE_DIR
-    lat_str = f"{lat:.3f}"
-    lon_str = f"{lon:.3f}"
-    return base / date / f"{cycle:02d}" / f"{lat_str}_{lon_str}.json"
+# ---------------------------------------------------------------------------
+# SQLite database helpers
+# ---------------------------------------------------------------------------
+
+def _ensure_grid_index_db(db_path: Path) -> sqlite3.Connection:
+    """Open grid index database and ensure schema exists."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS nbm_grids (
+            id INTEGER PRIMARY KEY,
+            cycle_date TEXT NOT NULL,
+            cycle_hour INTEGER NOT NULL,
+            forecast_hour INTEGER NOT NULL,
+            variable TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            grid_shape TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE (cycle_date, cycle_hour, forecast_hour, variable)
+        )
+    """)
+    conn.commit()
+    return conn
 
 
-def load_from_cache(date: str, cycle: int, lat: float, lon: float) -> Optional[dict]:
-    """Load cached forecast if available."""
-    cache_path = get_cache_path(date, cycle, lat, lon)
-    if cache_path.exists():
-        try:
-            with open(cache_path) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
+def _ensure_db(db_path: Path) -> sqlite3.Connection:
+    """Open database and ensure schema exists."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS nbm_forecasts (
+            target_date   TEXT NOT NULL,
+            cycle_hour    INTEGER NOT NULL,
+            latitude      REAL NOT NULL,
+            longitude     REAL NOT NULL,
+            temp_max_f    REAL NOT NULL,
+            temp_min_f    REAL NOT NULL,
+            cycle_date    TEXT NOT NULL,
+            hours_fetched INTEGER NOT NULL,
+            created_at    TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (target_date, cycle_hour, latitude, longitude)
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def load_from_db(target_date: str, cycle_hour: int, lat: float, lon: float,
+                 db_path: Path = None) -> Optional[dict]:
+    """Load cached forecast from SQLite if available."""
+    db = db_path or DB_PATH
+    if not db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(db))
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("""
+            SELECT target_date, cycle_hour, latitude, longitude,
+                   temp_max_f, temp_min_f, cycle_date, hours_fetched
+            FROM nbm_forecasts
+            WHERE target_date = ?
+              AND cycle_hour = ?
+              AND ABS(latitude - ?) < 0.0005
+              AND ABS(longitude - ?) < 0.0005
+            LIMIT 1
+        """, (target_date, cycle_hour, lat, lon))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return {
+                "date": row["target_date"],
+                "temp_max_f": row["temp_max_f"],
+                "temp_min_f": row["temp_min_f"],
+                "cycle": f"{row['cycle_date']}T{row['cycle_hour']:02d}Z",
+                "hours_fetched": row["hours_fetched"],
+            }
+    except sqlite3.Error:
+        pass
     return None
 
 
-def save_to_cache(date: str, cycle: int, lat: float, lon: float, data: dict):
-    """Save forecast to cache."""
-    cache_path = get_cache_path(date, cycle, lat, lon)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(cache_path, "w") as f:
-        json.dump(data, f)
+def save_to_db(target_date: str, cycle_hour: int, lat: float, lon: float,
+               data: dict, db_path: Path = None):
+    """Save forecast to SQLite."""
+    db = db_path or DB_PATH
+    conn = _ensure_db(db)
+    # Parse cycle_date from data["cycle"] which is like "2026-04-19T19Z"
+    cycle_str = data.get("cycle", "")
+    cycle_date = cycle_str.split("T")[0] if "T" in cycle_str else target_date
+    conn.execute("""
+        INSERT OR REPLACE INTO nbm_forecasts
+            (target_date, cycle_hour, latitude, longitude,
+             temp_max_f, temp_min_f, cycle_date, hours_fetched)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (target_date, cycle_hour, lat, lon,
+          data["temp_max_f"], data["temp_min_f"], cycle_date, data["hours_fetched"]))
+    conn.commit()
+    conn.close()
 
 
 def find_best_cycle(target_date: str, as_of: Optional[datetime] = None) -> tuple[str, int]:
@@ -236,12 +311,13 @@ def fetch_nbm_temps(cycle_date: str, cycle_hour: int, forecast_hour: int,
 
 def fetch_daily_temps(target_date: str, lat: float, lon: float,
                       as_of: Optional[datetime] = None,
-                      use_cache: bool = True) -> dict:
+                      use_cache: bool = True,
+                      db_path: Path = None) -> dict:
     """Fetch daily min/max temperatures for a target date."""
     cycle_date, cycle_hour = find_best_cycle(target_date, as_of)
 
     if use_cache:
-        cached = load_from_cache(target_date, cycle_hour, lat, lon)
+        cached = load_from_db(target_date, cycle_hour, lat, lon, db_path)
         if cached:
             return cached
 
@@ -268,7 +344,7 @@ def fetch_daily_temps(target_date: str, lat: float, lon: float,
         "hours_fetched": len(temps_f),
     }
 
-    save_to_cache(target_date, cycle_hour, lat, lon, result)
+    save_to_db(target_date, cycle_hour, lat, lon, result, db_path)
     return result
 
 
@@ -289,57 +365,52 @@ def parse_as_of(as_of_str: str) -> Optional[datetime]:
 # list-cache
 # ---------------------------------------------------------------------------
 
-_CACHE_FILE_RE = re.compile(r"^(?P<lat>-?\d+\.\d+)_(?P<lon>-?\d+\.\d+)\.json$")
-
-
-def list_cache(cache_dir: Path, date: Optional[str] = None,
+def list_cache(db_path: Path, date: Optional[str] = None,
                lat: Optional[float] = None, lon: Optional[float] = None) -> list[dict]:
-    """Walk cache_dir/{date}/{cycle}/{lat}_{lon}.json and return parsed entries."""
-    if not cache_dir.exists():
+    """Query SQLite for cached forecasts."""
+    if not db_path.exists():
         return []
 
-    rows: list[dict] = []
-    date_dirs = [cache_dir / date] if date else sorted(p for p in cache_dir.iterdir() if p.is_dir())
-    for date_dir in date_dirs:
-        if not date_dir.is_dir():
-            continue
-        ds = date_dir.name
-        # Skip non-date dirs (e.g. grib2/)
-        try:
-            datetime.strptime(ds, "%Y-%m-%d")
-        except ValueError:
-            continue
-        for cycle_dir in sorted(p for p in date_dir.iterdir() if p.is_dir()):
-            try:
-                cycle = int(cycle_dir.name)
-            except ValueError:
-                continue
-            for f in sorted(cycle_dir.glob("*.json")):
-                m = _CACHE_FILE_RE.match(f.name)
-                if not m:
-                    continue
-                f_lat = float(m.group("lat"))
-                f_lon = float(m.group("lon"))
-                if lat is not None and abs(f_lat - lat) > 1e-3:
-                    continue
-                if lon is not None and abs(f_lon - lon) > 1e-3:
-                    continue
-                try:
-                    with open(f) as fh:
-                        data = json.load(fh)
-                except (json.JSONDecodeError, IOError):
-                    continue
-                rows.append({
-                    "date": ds,
-                    "cycle": cycle,
-                    "lat": f_lat,
-                    "lon": f_lon,
-                    "temp_max_f": data.get("temp_max_f"),
-                    "temp_min_f": data.get("temp_min_f"),
-                    "hours_fetched": data.get("hours_fetched"),
-                    "path": str(f),
-                })
-    return rows
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+
+        query = """
+            SELECT target_date, cycle_hour, latitude, longitude,
+                   temp_max_f, temp_min_f, hours_fetched
+            FROM nbm_forecasts
+            WHERE 1=1
+        """
+        params = []
+
+        if date:
+            query += " AND target_date = ?"
+            params.append(date)
+        if lat is not None:
+            query += " AND ABS(latitude - ?) < 0.001"
+            params.append(lat)
+        if lon is not None:
+            query += " AND ABS(longitude - ?) < 0.001"
+            params.append(lon)
+
+        query += " ORDER BY target_date, cycle_hour"
+
+        cur = conn.execute(query, params)
+        rows = []
+        for row in cur:
+            rows.append({
+                "date": row["target_date"],
+                "cycle": row["cycle_hour"],
+                "lat": row["latitude"],
+                "lon": row["longitude"],
+                "temp_max_f": row["temp_max_f"],
+                "temp_min_f": row["temp_min_f"],
+                "hours_fetched": row["hours_fetched"],
+            })
+        conn.close()
+        return rows
+    except sqlite3.Error:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -505,13 +576,298 @@ def _parse_grib_ls(text: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Grid capture commands
+# ---------------------------------------------------------------------------
+
+# Maximum forecast hours in NBM (264 hours = 11 days)
+NBM_MAX_FORECAST_HOUR = 264
+
+# Default retention period in days
+DEFAULT_RETENTION_DAYS = 30
+
+
+def _grid_file_path(base_dir: Path, cycle_date: str, cycle_hour: int,
+                    forecast_hour: int, variable: str = "2t") -> Path:
+    """Return path for a NetCDF4 grid file."""
+    date_str = cycle_date.replace("-", "")
+    return (base_dir / "grids" / f"blend.{date_str}" /
+            f"{cycle_hour:02d}" / f"{variable}.f{forecast_hour:03d}.nc")
+
+
+def _download_and_extract_temp(cycle_date: str, cycle_hour: int,
+                                forecast_hour: int, base_dir: Path,
+                                index_db: Path) -> Optional[Path]:
+    """Download GRIB2, extract 2m temp to NetCDF4, update index.
+
+    Returns path to created NetCDF4 file, or None on failure.
+    """
+    import numpy as np
+
+    try:
+        import pygrib
+    except ImportError as e:
+        print(f"Error: pygrib required: {e}", file=sys.stderr)
+        return None
+
+    try:
+        from netCDF4 import Dataset
+    except ImportError as e:
+        print(f"Error: netCDF4 required: {e}", file=sys.stderr)
+        return None
+
+    nc_path = _grid_file_path(base_dir, cycle_date, cycle_hour, forecast_hour)
+
+    # Skip if already exists
+    if nc_path.exists():
+        return nc_path
+
+    s3_path = s3_grib_path(cycle_date, cycle_hour, forecast_hour)
+    try:
+        s3fs_mod = _require_s3fs()
+        fs = s3fs_mod.S3FileSystem(anon=True)
+
+        # Download GRIB2 to temp file
+        with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            fs.get(s3_path, tmp_path)
+
+            # Open GRIB2 and find 2m temperature
+            gribs = pygrib.open(tmp_path)
+            temp_msg = None
+            for msg in gribs:
+                if (msg.shortName == "2t" and
+                    msg.typeOfLevel == "heightAboveGround" and
+                    msg.level == 2):
+                    temp_msg = msg
+                    break
+
+            if temp_msg is None:
+                print(f"Warning: No 2t variable in {s3_path}", file=sys.stderr)
+                return None
+
+            # Extract data
+            data = temp_msg.values
+            lats, lons = temp_msg.latlons()
+            grid_shape = f"{data.shape[0]}x{data.shape[1]}"
+
+            # Create output directory
+            nc_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write NetCDF4 with compression
+            with Dataset(str(nc_path), 'w', format='NETCDF4') as nc:
+                # Create dimensions
+                nc.createDimension('y', data.shape[0])
+                nc.createDimension('x', data.shape[1])
+
+                # Create variables with compression
+                lat_var = nc.createVariable('latitude', 'f4', ('y', 'x'),
+                                            zlib=True, complevel=4)
+                lon_var = nc.createVariable('longitude', 'f4', ('y', 'x'),
+                                            zlib=True, complevel=4)
+                temp_var = nc.createVariable('temperature_2m', 'f4', ('y', 'x'),
+                                             zlib=True, complevel=4,
+                                             fill_value=np.nan)
+
+                # Set attributes
+                nc.title = f"NBM 2m Temperature"
+                nc.source = s3_path
+                nc.cycle_date = cycle_date
+                nc.cycle_hour = cycle_hour
+                nc.forecast_hour = forecast_hour
+
+                lat_var.units = "degrees_north"
+                lon_var.units = "degrees_east"
+                temp_var.units = "K"
+                temp_var.long_name = "2m Temperature"
+
+                # Write data
+                lat_var[:] = lats.astype(np.float32)
+                lon_var[:] = lons.astype(np.float32)
+
+                # Handle masked arrays
+                if hasattr(data, 'mask'):
+                    temp_data = data.data.astype(np.float32)
+                    temp_data[data.mask] = np.nan
+                    temp_var[:] = temp_data
+                else:
+                    temp_var[:] = data.astype(np.float32)
+
+            gribs.close()
+
+            # Update index database
+            conn = _ensure_grid_index_db(index_db)
+            conn.execute("""
+                INSERT OR REPLACE INTO nbm_grids
+                    (cycle_date, cycle_hour, forecast_hour, variable, file_path, grid_shape)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (cycle_date, cycle_hour, forecast_hour, "2t",
+                  str(nc_path.relative_to(base_dir)), grid_shape))
+            conn.commit()
+            conn.close()
+
+            return nc_path
+
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    except Exception as e:
+        print(f"Error capturing f{forecast_hour:03d}: {e}", file=sys.stderr)
+        return None
+
+
+def capture_cycle(cycle_date: str, cycle_hour: int, base_dir: Path,
+                  index_db: Path, forecast_hours: Optional[list[int]] = None,
+                  verbose: bool = True) -> dict:
+    """Capture a full NBM cycle, extracting 2m temp to NetCDF4.
+
+    Returns dict with counts: {"success": N, "failed": N, "skipped": N}
+    """
+    if forecast_hours is None:
+        forecast_hours = list(range(1, NBM_MAX_FORECAST_HOUR + 1))
+
+    result = {"success": 0, "failed": 0, "skipped": 0}
+    total = len(forecast_hours)
+
+    for i, fhr in enumerate(forecast_hours, 1):
+        nc_path = _grid_file_path(base_dir, cycle_date, cycle_hour, fhr)
+        if nc_path.exists():
+            result["skipped"] += 1
+            status = "skip"
+        else:
+            path = _download_and_extract_temp(cycle_date, cycle_hour, fhr,
+                                               base_dir, index_db)
+            if path:
+                result["success"] += 1
+                status = "ok"
+            else:
+                result["failed"] += 1
+                status = "FAIL"
+
+        if verbose:
+            pct = (i * 100) // total
+            # Progress bar with percentage
+            print(f"\r  f{fhr:03d} [{pct:3d}%] {status:4s} | "
+                  f"+{result['success']} skip:{result['skipped']} fail:{result['failed']}",
+                  end="", file=sys.stderr, flush=True)
+
+    if verbose:
+        print(file=sys.stderr)  # newline after progress
+
+    return result
+
+
+def list_available_cycles(days: int = 10) -> list[dict]:
+    """List NBM cycles available on S3."""
+    return list_remote(days=days)
+
+
+def list_captured_cycles(index_db: Path) -> list[dict]:
+    """List cycles in the local grid index."""
+    if not index_db.exists():
+        return []
+
+    conn = sqlite3.connect(str(index_db))
+    conn.row_factory = sqlite3.Row
+    cur = conn.execute("""
+        SELECT cycle_date, cycle_hour, COUNT(*) as file_count,
+               MIN(forecast_hour) as fhr_min, MAX(forecast_hour) as fhr_max
+        FROM nbm_grids
+        GROUP BY cycle_date, cycle_hour
+        ORDER BY cycle_date DESC, cycle_hour DESC
+    """)
+    rows = []
+    for r in cur:
+        rows.append({
+            "cycle_date": r["cycle_date"],
+            "cycle_hour": r["cycle_hour"],
+            "file_count": r["file_count"],
+            "fhr_min": r["fhr_min"],
+            "fhr_max": r["fhr_max"],
+        })
+    conn.close()
+    return rows
+
+
+def cleanup_old_grids(base_dir: Path, index_db: Path,
+                      older_than_days: int) -> dict:
+    """Delete grid files older than specified days.
+
+    Returns dict with counts: {"deleted_files": N, "deleted_cycles": N}
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now() - timedelta(days=older_than_days)
+    cutoff_date = cutoff.strftime("%Y-%m-%d")
+
+    result = {"deleted_files": 0, "deleted_cycles": 0}
+
+    if not index_db.exists():
+        return result
+
+    conn = sqlite3.connect(str(index_db))
+    conn.row_factory = sqlite3.Row
+
+    # Find old entries
+    cur = conn.execute("""
+        SELECT id, cycle_date, cycle_hour, file_path
+        FROM nbm_grids
+        WHERE cycle_date < ?
+    """, (cutoff_date,))
+
+    ids_to_delete = []
+    cycles_seen = set()
+
+    for r in cur:
+        ids_to_delete.append(r["id"])
+        cycles_seen.add((r["cycle_date"], r["cycle_hour"]))
+
+        # Delete file
+        file_path = base_dir / r["file_path"]
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                result["deleted_files"] += 1
+            except OSError:
+                pass
+
+    # Delete index entries
+    if ids_to_delete:
+        placeholders = ",".join("?" * len(ids_to_delete))
+        conn.execute(f"DELETE FROM nbm_grids WHERE id IN ({placeholders})",
+                     ids_to_delete)
+        conn.commit()
+
+    conn.close()
+
+    result["deleted_cycles"] = len(cycles_seen)
+
+    # Clean up empty directories
+    grids_dir = base_dir / "grids"
+    if grids_dir.exists():
+        for blend_dir in grids_dir.iterdir():
+            if blend_dir.is_dir():
+                # Check if any files remain
+                has_files = any(blend_dir.rglob("*.nc"))
+                if not has_files:
+                    try:
+                        shutil.rmtree(str(blend_dir))
+                    except OSError:
+                        pass
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Command dispatch
 # ---------------------------------------------------------------------------
 
 def cmd_fetch(args: argparse.Namespace) -> int:
-    global CACHE_DIR
-    if args.cache_dir:
-        CACHE_DIR = Path(args.cache_dir)
+    global DB_PATH
+    if args.db_path:
+        DB_PATH = Path(args.db_path)
 
     as_of = None
     if args.as_of:
@@ -527,15 +883,17 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         _output({"error": f"Invalid date format: {args.date}. Use YYYY-MM-DD"}, args.format)
         return 1
 
+    db_path = Path(args.db_path) if args.db_path else DB_PATH
     result = fetch_daily_temps(args.date, args.lat, args.lon, as_of,
-                               use_cache=not args.no_cache)
+                               use_cache=not args.no_cache,
+                               db_path=db_path)
     _output(result, args.format)
     return 1 if "error" in result else 0
 
 
 def cmd_list_cache(args: argparse.Namespace) -> int:
-    cache_dir = Path(args.cache_dir) if args.cache_dir else CACHE_DIR
-    rows = list_cache(cache_dir, date=args.date, lat=args.lat, lon=args.lon)
+    db_path = Path(args.db_path) if args.db_path else DB_PATH
+    rows = list_cache(db_path, date=args.date, lat=args.lat, lon=args.lon)
     _output(rows, args.format,
             ["date", "cycle", "lat", "lon", "temp_min_f", "temp_max_f", "hours_fetched"],
             ["Date", "Cycle", "Lat", "Lon", "Min F", "Max F", "Hours"])
@@ -567,7 +925,121 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     return 0
 
 
-KNOWN_COMMANDS = {"fetch", "list-cache", "list-remote", "inventory"}
+def cmd_capture(args: argparse.Namespace) -> int:
+    """Capture one or more NBM cycles to local NetCDF4 storage."""
+    base_dir = Path(args.base_dir) if args.base_dir else DEFAULT_NBM_BASE
+    index_db = base_dir / "index.db"
+
+    # Parse forecast hours if specified
+    forecast_hours = None
+    if args.forecast_hours:
+        if "-" in args.forecast_hours:
+            start, end = args.forecast_hours.split("-")
+            forecast_hours = list(range(int(start), int(end) + 1))
+        else:
+            forecast_hours = [int(x) for x in args.forecast_hours.split(",")]
+
+    cycles_to_capture = []
+
+    if args.cycle is not None:
+        # Single cycle specified
+        cycles_to_capture.append((args.date, args.cycle))
+    else:
+        # All cycles for the date
+        for ch in NBM_CYCLES:
+            cycles_to_capture.append((args.date, ch))
+
+    total = {"success": 0, "failed": 0, "skipped": 0}
+
+    for cycle_date, cycle_hour in cycles_to_capture:
+        print(f"Capturing {cycle_date} {cycle_hour:02d}Z...", file=sys.stderr)
+        result = capture_cycle(cycle_date, cycle_hour, base_dir, index_db,
+                               forecast_hours, verbose=True)
+        for k in total:
+            total[k] += result[k]
+
+    _output(total, args.format,
+            ["success", "failed", "skipped"],
+            ["Success", "Failed", "Skipped"])
+    return 0 if total["failed"] == 0 else 1
+
+
+def cmd_capture_missing(args: argparse.Namespace) -> int:
+    """Scan S3 for available cycles, download missing ones."""
+    base_dir = Path(args.base_dir) if args.base_dir else DEFAULT_NBM_BASE
+    index_db = base_dir / "index.db"
+
+    # Get available cycles from S3
+    print(f"Scanning S3 for last {args.days} days...", file=sys.stderr)
+    try:
+        available = list_available_cycles(days=args.days)
+    except Exception as e:
+        _output({"error": f"S3 scan failed: {e}"}, args.format)
+        return 1
+
+    # Get captured cycles
+    captured = list_captured_cycles(index_db)
+    captured_set = {(c["cycle_date"], c["cycle_hour"]) for c in captured
+                    if c["file_count"] >= NBM_MAX_FORECAST_HOUR}
+
+    # Find missing
+    missing = []
+    for a in available:
+        key = (a["date"], a["cycle"])
+        if key not in captured_set:
+            missing.append(key)
+
+    if not missing:
+        print("All available cycles are captured.", file=sys.stderr)
+        _output({"missing": 0, "captured": 0}, args.format)
+        return 0
+
+    print(f"Found {len(missing)} missing cycles", file=sys.stderr)
+
+    total = {"success": 0, "failed": 0, "skipped": 0}
+
+    for cycle_date, cycle_hour in missing:
+        print(f"\nCapturing {cycle_date} {cycle_hour:02d}Z...", file=sys.stderr)
+        result = capture_cycle(cycle_date, cycle_hour, base_dir, index_db,
+                               verbose=True)
+        for k in total:
+            total[k] += result[k]
+
+    _output(total, args.format,
+            ["success", "failed", "skipped"],
+            ["Success", "Failed", "Skipped"])
+    return 0 if total["failed"] == 0 else 1
+
+
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    """Delete grid files older than specified retention period."""
+    base_dir = Path(args.base_dir) if args.base_dir else DEFAULT_NBM_BASE
+    index_db = base_dir / "index.db"
+
+    print(f"Cleaning up files older than {args.older_than} days...", file=sys.stderr)
+    result = cleanup_old_grids(base_dir, index_db, args.older_than)
+
+    _output(result, args.format,
+            ["deleted_files", "deleted_cycles"],
+            ["Files Deleted", "Cycles Deleted"])
+    return 0
+
+
+def cmd_grids(args: argparse.Namespace) -> int:
+    """List captured grid cycles."""
+    base_dir = Path(args.base_dir) if args.base_dir else DEFAULT_NBM_BASE
+    index_db = base_dir / "index.db"
+
+    rows = list_captured_cycles(index_db)
+
+    _output(rows, args.format,
+            ["cycle_date", "cycle_hour", "file_count", "fhr_min", "fhr_max"],
+            ["Date", "Cycle", "Files", "FHR Min", "FHR Max"])
+    return 0
+
+
+KNOWN_COMMANDS = {"fetch", "list-cache", "list-remote", "inventory",
+                  "capture", "capture-missing", "cleanup", "grids"}
 
 
 def _add_format_arg(parser: argparse.ArgumentParser):
@@ -592,7 +1064,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.add_argument("--lon", type=float, required=True)
     p_fetch.add_argument("--date", type=str, required=True, help="Target date YYYY-MM-DD")
     p_fetch.add_argument("--as-of", type=str, default="", help="Point-in-time constraint (ISO-8601 UTC)")
-    p_fetch.add_argument("--cache-dir", type=str, default="")
+    p_fetch.add_argument("--db-path", type=str, default="")
     p_fetch.add_argument("--no-cache", action="store_true", help="Bypass cache (re-download)")
     _add_format_arg(p_fetch)
 
@@ -600,7 +1072,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--date", type=str, default=None)
     p_list.add_argument("--lat", type=float, default=None)
     p_list.add_argument("--lon", type=float, default=None)
-    p_list.add_argument("--cache-dir", type=str, default="")
+    p_list.add_argument("--db-path", type=str, default="")
     _add_format_arg(p_list)
 
     p_remote = sub.add_parser("list-remote", help="List NBM cycles on NOAA S3")
@@ -615,6 +1087,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_inv.add_argument("--forecast-hour", type=int, default=1)
     p_inv.add_argument("--grib-cache-dir", type=str, default="")
     _add_format_arg(p_inv)
+
+    # Grid capture commands
+    p_capture = sub.add_parser("capture", help="Capture NBM cycle(s) to local NetCDF4")
+    p_capture.add_argument("--date", type=str, required=True, help="Cycle date YYYY-MM-DD")
+    p_capture.add_argument("--cycle", type=int, choices=NBM_CYCLES,
+                           help="Cycle hour (1, 7, 13, or 19). If omitted, captures all cycles.")
+    p_capture.add_argument("--forecast-hours", type=str,
+                           help="Forecast hours: '1-264' or '1,2,3'. Default: all (1-264)")
+    p_capture.add_argument("--base-dir", type=str, default="")
+    _add_format_arg(p_capture)
+
+    p_capture_missing = sub.add_parser("capture-missing",
+                                        help="Download missing cycles from S3")
+    p_capture_missing.add_argument("--days", type=int, default=10,
+                                   help="How many days back to scan S3 (default 10)")
+    p_capture_missing.add_argument("--base-dir", type=str, default="")
+    _add_format_arg(p_capture_missing)
+
+    p_cleanup = sub.add_parser("cleanup", help="Delete old grid files")
+    p_cleanup.add_argument("--older-than", type=int, default=DEFAULT_RETENTION_DAYS,
+                           help=f"Delete files older than N days (default {DEFAULT_RETENTION_DAYS})")
+    p_cleanup.add_argument("--base-dir", type=str, default="")
+    _add_format_arg(p_cleanup)
+
+    p_grids = sub.add_parser("grids", help="List captured grid cycles")
+    p_grids.add_argument("--base-dir", type=str, default="")
+    _add_format_arg(p_grids)
 
     return parser
 
@@ -638,6 +1137,14 @@ def main() -> int:
         return cmd_list_remote(args)
     if args.command == "inventory":
         return cmd_inventory(args)
+    if args.command == "capture":
+        return cmd_capture(args)
+    if args.command == "capture-missing":
+        return cmd_capture_missing(args)
+    if args.command == "cleanup":
+        return cmd_cleanup(args)
+    if args.command == "grids":
+        return cmd_grids(args)
 
     parser.print_help()
     return 1

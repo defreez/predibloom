@@ -1,16 +1,21 @@
 #pragma once
 
+#include "forecast_db.hpp"
 #include "gribstream_types.hpp"
+#include "nbm_grid_reader.hpp"
 #include "result.hpp"
+#include <memory>
 #include <string>
 
 namespace predibloom::api {
 
-// Client for fetching NBM forecasts from NOAA S3 via the nbm_fetch.py script.
+// Client for reading NBM forecasts from the local ForecastDb.
 // Returns WeatherResponse matching GribStreamClient's interface.
+// Data must be pre-populated via `nbm download` command.
 class LocalNbmClient {
 public:
     LocalNbmClient();
+    explicit LocalNbmClient(const std::string& db_path);
     ~LocalNbmClient();
 
     LocalNbmClient(const LocalNbmClient&) = delete;
@@ -30,24 +35,37 @@ public:
                                         double longitude,
                                         const std::string& date);
 
-    // Set the path to the nbm_fetch.py script (default: scripts/nbm_fetch.py)
-    void setScriptPath(const std::string& path) { script_path_ = path; }
+    // Set the database path (for testing).
+    void setDbPath(const std::string& path);
 
-    // Set the cache directory (default: .cache/nbm)
-    void setCacheDir(const std::string& dir) { cache_dir_ = dir; }
+    // Set the grid base path (for testing). Pass empty to disable grid fallback.
+    void setGridPath(const std::string& path);
 
-    // Enable/disable caching (default: enabled)
-    void setCaching(bool enabled) { caching_ = enabled; }
+    // Check if database is open.
+    bool is_open() const;
+
+    // No-op for interface compatibility. SQLite data is always persistent.
+    void setCaching(bool /*enabled*/) {}
 
 private:
-    Result<WeatherResponse> runScript(double latitude,
-                                       double longitude,
-                                       const std::string& date,
-                                       const std::string& asOf_iso);
+    // Find the best cycle for a target date given an as-of constraint.
+    std::pair<std::string, int> findBestCycle(const std::string& target_date,
+                                               const std::string& asOf_iso);
 
-    std::string script_path_ = "scripts/nbm_fetch.py";
-    std::string cache_dir_ = ".cache/nbm";
-    bool caching_ = true;
+    // Compute forecast hours needed to cover a target date.
+    std::vector<int> computeForecastHours(const std::string& cycle_date,
+                                           int cycle_hour,
+                                           const std::string& target_date);
+
+    // Fetch from grid files and cache to SQLite.
+    Result<WeatherResponse> fetchFromGrid(double latitude,
+                                           double longitude,
+                                           const std::string& target_date,
+                                           const std::string& cycle_date,
+                                           int cycle_hour);
+
+    std::unique_ptr<ForecastDb> db_;
+    std::unique_ptr<NbmGridReader> grid_reader_;
 };
 
-} // namespace predibloom::api
+}  // namespace predibloom::api

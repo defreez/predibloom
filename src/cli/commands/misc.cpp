@@ -1,11 +1,8 @@
 #include "misc.hpp"
-#include "../../api/local_nbm_client.hpp"
-#include "../../core/time_utils.hpp"
 
 #include <iostream>
 #include <iomanip>
 #include <cstdio>
-#include <vector>
 
 namespace predibloom::cli {
 
@@ -51,68 +48,6 @@ int runSeries(const core::Config& config) {
                       << "  " << std::left << std::setw(10) << source
                       << "\n";
         }
-    }
-    return 0;
-}
-
-int runNbmDownload(const core::Config& config,
-                   const std::string& start_date,
-                   const std::string& end_date) {
-    std::vector<const core::TrackedSeries*> nbm_series;
-    for (const auto& tab : config.tabs) {
-        for (const auto& sc : tab.series) {
-            if (sc.latitude != 0 && sc.weather_source == core::WeatherSource::LocalNbm) {
-                nbm_series.push_back(&sc);
-            }
-        }
-    }
-
-    if (nbm_series.empty()) {
-        std::cerr << "No series configured with weather_source: local_nbm\n";
-        return 1;
-    }
-
-    std::cerr << "Downloading NBM data for " << nbm_series.size() << " cities from "
-              << start_date << " to " << end_date << "\n";
-
-    api::LocalNbmClient nbm_client;
-    int total = 0;
-    int success = 0;
-
-    std::vector<std::string> dates;
-    std::string current = start_date;
-    while (current <= end_date) {
-        dates.push_back(current);
-        current = core::addDaysToDate(current, 1);
-        if (current.empty()) break;
-    }
-
-    std::cerr << "Date range: " << dates.size() << " days\n\n";
-
-    for (const auto* sc : nbm_series) {
-        std::cerr << sc->label << " (" << sc->series_ticker << ")\n";
-
-        int city_success = 0;
-        for (const auto& date : dates) {
-            total++;
-            std::string as_of = core::computeAsOfIso(
-                date, sc->entry_day_offset, sc->effectiveEntryHour());
-
-            auto result = nbm_client.getForecast(sc->latitude, sc->longitude, date, as_of);
-            if (result.ok()) {
-                success++;
-                city_success++;
-                std::cerr << ".";
-            } else {
-                std::cerr << "x";
-            }
-        }
-        std::cerr << " " << city_success << "/" << dates.size() << "\n";
-    }
-
-    std::cerr << "\nTotal: " << success << "/" << total << " forecasts downloaded\n";
-    if (success < total) {
-        std::cerr << "Note: NOAA S3 only retains ~10 days of NBM data.\n";
     }
     return 0;
 }

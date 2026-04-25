@@ -175,7 +175,7 @@ int runPredict(const PredictOptions& opts,
             p.margin = margin_from_edge;
             p.bid = target->market->yes_bid_cents();
             p.ask = target->market->yes_ask_cents();
-            p.tradeable = (margin_from_edge >= opts.margin) && (p.ask <= opts.max_price);
+            p.tradeable = (margin_from_edge >= opts.margin) && (p.ask >= opts.min_price) && (p.ask <= opts.max_price);
         } else {
             p.strike = "---";
             p.ticker = "";
@@ -241,6 +241,8 @@ int runPredict(const PredictOptions& opts,
                 tradeable_count++;
             } else if (p.margin >= opts.margin && p.ask > opts.max_price) {
                 std::cout << "EXPENSIVE";
+            } else if (p.margin >= opts.margin && p.ask < opts.min_price) {
+                std::cout << "SUS";
             } else {
                 std::cout << "-";
             }
@@ -250,7 +252,7 @@ int runPredict(const PredictOptions& opts,
 
     std::cout << std::string(78, '-') << "\n";
     std::cout << "Tradeable signals: " << tradeable_count << "/" << predictions.size()
-              << " (margin >= " << opts.margin << "°F, ask <= " << (int)opts.max_price << "¢)\n";
+              << " (margin >= " << opts.margin << "°F, ask " << (int)opts.min_price << "-" << (int)opts.max_price << "¢)\n";
 
     if (tradeable_count > 0) {
         std::cout << "\nTickers to buy:\n";
