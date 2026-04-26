@@ -27,6 +27,7 @@ struct TrackedSeries {
     double offset = 2.0;  // Calibration offset added to forecast to align with NWS settlement
     int entry_hour = -1;   // UTC hour for backtest entry (-1 = use default: 4 UTC)
     int entry_day_offset = 0;  // 0 = same UTC day as settlement, -1 = day before
+    int utc_offset_hours = -5;  // Timezone offset from UTC (e.g., -5 for EST, -8 for PST)
     WeatherSource weather_source = WeatherSource::GribStream;  // Which weather API to use
 
     bool isLowTemp() const { return isLowTempSeries(series_ticker); }

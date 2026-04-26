@@ -167,7 +167,7 @@ TEST(LocalNbmClient, CacheMissReturnsError) {
     client.setGridPath("");
 
     // Cache miss returns error when neither SQLite cache nor grid files are available.
-    auto result = client.getForecast(40.758, -73.985, "2026-04-25");
+    auto result = client.getForecast(40.758, -73.985, "2026-04-25", -5);
     EXPECT_TRUE(result.is_error());
     // The error message mentions either database or grid capture.
     EXPECT_NE(result.error().message.find("No forecast"), std::string::npos);
@@ -194,7 +194,7 @@ TEST(LocalNbmClient, GetForecastFromDb) {
     }
 
     LocalNbmClient client(db_path);
-    auto result = client.getForecast(40.758, -73.985, "2026-04-25");
+    auto result = client.getForecast(40.758, -73.985, "2026-04-25", -5);
     ASSERT_TRUE(result.ok()) << result.error().message;
     EXPECT_EQ(result->daily.time.size(), 1u);
     EXPECT_EQ(result->daily.time[0], "2026-04-25");

@@ -64,6 +64,8 @@ find_package(netCDF REQUIRED)
 # Shared core library (API client + service layer)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
+    src/api/kalshi_db.cpp
+    src/api/local_kalshi_client.cpp
     src/api/gribstream_client.cpp
     src/api/local_nbm_client.cpp
     src/api/nbm_grid_reader.cpp
@@ -119,6 +121,7 @@ add_executable(predibloom-cli
     src/cli/commands/misc.cpp
     src/cli/commands/nbm.cpp
     src/cli/commands/history.cpp
+    src/cli/commands/kalshi_sync.cpp
 )
 
 target_link_libraries(predibloom-cli PRIVATE

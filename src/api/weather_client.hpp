@@ -21,21 +21,25 @@ public:
 
     virtual ~WeatherClient() = default;
 
-    // Forecast for a single local NY date.
+    // Forecast for a single local date.
+    // utc_offset_hours: timezone offset from UTC (e.g., -5 for EST, -8 for PST)
     virtual Result<WeatherResponse> getForecast(double latitude,
                                                   double longitude,
                                                   const std::string& date,
+                                                  int utc_offset_hours,
                                                   const std::string& asOf_iso = "") = 0;
 
-    // Actuals for a single local NY date.
+    // Actuals for a single local date.
     virtual Result<WeatherResponse> getActuals(double latitude,
                                                  double longitude,
-                                                 const std::string& date) = 0;
+                                                 const std::string& date,
+                                                 int utc_offset_hours) = 0;
 
     virtual void setCaching(bool enabled) = 0;
 };
 
 // Wrapper for GribStreamClient
+// Note: GribStream handles timezone internally, so utc_offset_hours is ignored.
 class GribStreamWeatherClient : public WeatherClient {
 public:
     explicit GribStreamWeatherClient(const std::string& api_token)
@@ -44,13 +48,15 @@ public:
     Result<WeatherResponse> getForecast(double latitude,
                                           double longitude,
                                           const std::string& date,
+                                          int /*utc_offset_hours*/,
                                           const std::string& asOf_iso = "") override {
         return client_.getForecast(latitude, longitude, date, asOf_iso);
     }
 
     Result<WeatherResponse> getActuals(double latitude,
                                          double longitude,
-                                         const std::string& date) override {
+                                         const std::string& date,
+                                         int /*utc_offset_hours*/) override {
         return client_.getActuals(latitude, longitude, date);
     }
 
@@ -70,14 +76,16 @@ public:
     Result<WeatherResponse> getForecast(double latitude,
                                           double longitude,
                                           const std::string& date,
+                                          int utc_offset_hours,
                                           const std::string& asOf_iso = "") override {
-        return client_.getForecast(latitude, longitude, date, asOf_iso);
+        return client_.getForecast(latitude, longitude, date, utc_offset_hours, asOf_iso);
     }
 
     Result<WeatherResponse> getActuals(double latitude,
                                          double longitude,
-                                         const std::string& date) override {
-        return client_.getActuals(latitude, longitude, date);
+                                         const std::string& date,
+                                         int utc_offset_hours) override {
+        return client_.getActuals(latitude, longitude, date, utc_offset_hours);
     }
 
     void setCaching(bool enabled) override {

@@ -161,6 +161,15 @@ inline std::string currentUtcDatetimeHour() {
     return buf;
 }
 
+// Get current UTC date as "YYYY-MM-DD".
+inline std::string todayUtc() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm utc = {};
+    gmtime_r(&t, &utc);
+    return formatDate(utc);
+}
+
 // Parse "YYYY-MM-DDTHH" to time_t (seconds since epoch, UTC).
 // Returns -1 on failure.
 inline time_t parseHourDatetime(const std::string& dt) {

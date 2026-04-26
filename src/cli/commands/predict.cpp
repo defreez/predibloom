@@ -126,7 +126,8 @@ int runPredict(const PredictOptions& opts,
             as_of = core::currentUtcDatetimeHour() + ":00:00Z";
         }
         auto forecast_result = weather_client->getForecast(
-            series_config->latitude, series_config->longitude, opts.date, as_of);
+            series_config->latitude, series_config->longitude, opts.date,
+            series_config->utc_offset_hours, as_of);
 
         if (!forecast_result.ok()) {
             failures.push_back({series_config->label, "forecast: " + forecast_result.error().message});

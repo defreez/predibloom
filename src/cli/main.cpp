@@ -12,6 +12,7 @@
 #include "commands/misc.hpp"
 #include "commands/nbm.hpp"
 #include "commands/history.hpp"
+#include "commands/kalshi_sync.hpp"
 #include <iostream>
 
 int main(int argc, char** argv) {
@@ -47,6 +48,13 @@ int main(int argc, char** argv) {
     int portfolio_settle_days = 7;
     portfolio_settlements_cmd->add_option("-d,--days", portfolio_settle_days, "Days to look back")
         ->default_val(7);
+
+    auto* kalshi_cmd = app.add_subcommand("kalshi", "Kalshi data sync/cache");
+    auto* kalshi_sync_cmd = kalshi_cmd->add_subcommand("sync", "Sync markets and trades");
+    auto* kalshi_list_cmd = kalshi_cmd->add_subcommand("list", "List cached markets");
+    auto* kalshi_status_cmd = kalshi_cmd->add_subcommand("status", "Show sync status");
+
+    auto* mfr_cmd = app.add_subcommand("mfr", "Medford, OR forecast (MFR airport)");
 
     // Markets command options
     std::string markets_status = "open", markets_event_ticker, markets_series_ticker, markets_format = "table";
@@ -214,6 +222,28 @@ int main(int argc, char** argv) {
     nbm_grids_cmd->add_option("-f,--format", nbm_grids_format, "Output format")
         ->default_val("table")->check(CLI::IsMember({"table", "json"}));
 
+    // kalshi sync options
+    std::vector<std::string> kalshi_sync_series;
+    bool kalshi_sync_skip_trades = false;
+    kalshi_sync_cmd->add_option("-s,--series", kalshi_sync_series, "Series to sync (default: all configured)")
+        ->delimiter(',');
+    kalshi_sync_cmd->add_flag("--skip-trades", kalshi_sync_skip_trades, "Only sync markets, skip trades");
+
+    // kalshi list options
+    std::string kalshi_list_series, kalshi_list_format = "table";
+    kalshi_list_cmd->add_option("-s,--series", kalshi_list_series, "Series to list")->required();
+    kalshi_list_cmd->add_option("-f,--format", kalshi_list_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    // kalshi status options
+    std::string kalshi_status_format = "table";
+    kalshi_status_cmd->add_option("-f,--format", kalshi_status_format, "Output format")
+        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+
+    // mfr options
+    std::string mfr_date;
+    mfr_cmd->add_option("-d,--date", mfr_date, "Date YYYY-MM-DD (default: today)");
+
     app.require_subcommand(1);
     CLI11_PARSE(app, argc, argv);
 
@@ -304,7 +334,7 @@ int main(int argc, char** argv) {
         opts.trade_size = backtest_trade_size;
         opts.latency_hours = backtest_latency;
         opts.latency_sweep = backtest_latency_sweep;
-        return predibloom::cli::runBacktest(opts, config, client);
+        return predibloom::cli::runBacktest(opts, config);
     }
 
     // Handle predict command
@@ -359,6 +389,26 @@ int main(int argc, char** argv) {
     // Handle series command
     if (*series_cmd) {
         return predibloom::cli::runSeries(config);
+    }
+
+    // Handle kalshi command
+    if (*kalshi_cmd) {
+        if (*kalshi_sync_cmd) {
+            return predibloom::cli::runKalshiSync(config, client, kalshi_sync_series, kalshi_sync_skip_trades);
+        }
+        if (*kalshi_list_cmd) {
+            return predibloom::cli::runKalshiList(kalshi_list_series, kalshi_list_format);
+        }
+        if (*kalshi_status_cmd) {
+            return predibloom::cli::runKalshiStatus(kalshi_status_format);
+        }
+        std::cerr << "kalshi requires a subcommand (sync|list|status)\n";
+        return 1;
+    }
+
+    // Handle mfr command
+    if (*mfr_cmd) {
+        return predibloom::cli::runMfr(mfr_date);
     }
 
     return 0;

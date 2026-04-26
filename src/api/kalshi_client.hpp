@@ -34,6 +34,7 @@ struct GetTradesParams {
     std::string ticker;
     std::optional<std::string> cursor;
     std::optional<int> limit;
+    std::optional<int64_t> min_ts;  // Only trades after this Unix timestamp (seconds)
 };
 
 struct GetFillsParams {
@@ -75,6 +76,7 @@ public:
     Result<std::vector<Market>> getAllMarkets(const GetMarketsParams& params = {});
     Result<TradesResponse> getTrades(const GetTradesParams& params);
     Result<std::vector<Trade>> getAllTrades(const std::string& ticker);
+    Result<std::vector<Trade>> getTradesAfter(const std::string& ticker, int64_t min_ts);
 
     // Authenticated endpoints
     Result<FillsResponse> getFills(const GetFillsParams& params = {});

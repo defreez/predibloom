@@ -1,5 +1,6 @@
 #include "backtest.hpp"
 #include "../bracket.hpp"
+#include "../../api/local_kalshi_client.hpp"
 #include "../../api/weather_client.hpp"
 #include "../../api/nws_client.hpp"
 #include "../../core/time_utils.hpp"
@@ -333,8 +334,15 @@ void printLatencySweep(const std::map<int, std::vector<Trade>>& trades_by_latenc
 }  // namespace
 
 int runBacktest(const BacktestOptions& opts,
-                const core::Config& config,
-                api::KalshiClient& client) {
+                const core::Config& config) {
+    // Use local SQLite cache for all Kalshi data
+    api::LocalKalshiClient client;
+    if (!client.is_open()) {
+        std::cerr << "Error: Could not open local Kalshi cache.\n";
+        std::cerr << "Run 'kalshi sync' first to download market and trade data.\n";
+        return 1;
+    }
+
     // Build series list
     std::vector<std::string> series_list = opts.series;
     if (series_list.empty()) {
@@ -387,7 +395,6 @@ int runBacktest(const BacktestOptions& opts,
     bool is_sweep = opts.latency_sweep.size() > 1;
 
     api::NwsClient nws;
-    client.setCaching(true);
     nws.setCaching(true);
 
     std::string algo_name = opts.algo.empty() ? "simple" : opts.algo;
@@ -471,7 +478,8 @@ int runBacktest(const BacktestOptions& opts,
                 std::string as_of = core::computeAsOfIso(
                     date, series_config->entry_day_offset, series_config->effectiveEntryHour());
                 auto forecast_result = weather_client->getForecast(
-                    series_config->latitude, series_config->longitude, date, as_of);
+                    series_config->latitude, series_config->longitude, date,
+                    series_config->utc_offset_hours, as_of);
 
                 std::optional<double> forecast_opt;
                 if (forecast_result.ok()) {

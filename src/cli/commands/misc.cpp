@@ -1,8 +1,11 @@
 #include "misc.hpp"
+#include "../../api/local_nbm_client.hpp"
+#include "../../core/time_utils.hpp"
 
 #include <iostream>
 #include <iomanip>
 #include <cstdio>
+#include <ctime>
 
 namespace predibloom::cli {
 
@@ -49,6 +52,49 @@ int runSeries(const core::Config& config) {
                       << "\n";
         }
     }
+    return 0;
+}
+
+int runMfr(const std::string& date) {
+    // MFR airport: Medford, Oregon
+    constexpr double MFR_LAT = 42.3742;
+    constexpr double MFR_LON = -122.8735;
+
+    // Default to today if no date specified
+    std::string target_date = date;
+    if (target_date.empty()) {
+        target_date = core::todayUtc();
+    }
+
+    api::LocalNbmClient nbm;
+    if (!nbm.is_open()) {
+        std::cerr << "Error: NBM cache not available\n";
+        return 1;
+    }
+
+    // Get forecast using most recent available cycle
+    // Medford is in Pacific Time (UTC-8 standard, UTC-7 daylight)
+    constexpr int MFR_UTC_OFFSET = -8;
+    std::string now_iso = core::currentUtcDatetimeHour() + ":00:00Z";
+    auto result = nbm.getForecast(MFR_LAT, MFR_LON, target_date, MFR_UTC_OFFSET, now_iso);
+    if (!result.ok()) {
+        std::cerr << "Error: " << result.error().message << "\n";
+        return 1;
+    }
+
+    const auto& resp = result.value();
+    if (resp.daily.temperature_2m_max.empty() || resp.daily.temperature_2m_min.empty()) {
+        std::cerr << "No forecast data for " << target_date << "\n";
+        return 1;
+    }
+
+    double high = resp.daily.temperature_2m_max[0];
+    double low = resp.daily.temperature_2m_min[0];
+
+    std::cout << "MFR (Medford, OR) - " << target_date << "\n";
+    std::cout << "  High: " << std::fixed << std::setprecision(0) << high << "°F\n";
+    std::cout << "  Low:  " << std::fixed << std::setprecision(0) << low << "°F\n";
+
     return 0;
 }
 

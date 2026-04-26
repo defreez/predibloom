@@ -158,15 +158,18 @@ std::pair<std::string, int> LocalNbmClient::findBestCycle(const std::string& tar
 
 std::vector<int> LocalNbmClient::computeForecastHours(const std::string& cycle_date,
                                                         int cycle_hour,
-                                                        const std::string& target_date) {
+                                                        const std::string& target_date,
+                                                        int utc_offset_hours) {
     // Parse cycle datetime
     std::tm cycle_tm = parse_date(cycle_date);
     cycle_tm.tm_hour = cycle_hour;
     std::time_t cycle_t = timegm(&cycle_tm);
 
-    // Parse target date and compute NYC midnight (05:00 UTC for EST)
+    // Parse target date and compute local midnight in UTC
+    // e.g., utc_offset_hours=-5 (EST) means midnight = 05:00 UTC
+    //       utc_offset_hours=-8 (PST) means midnight = 08:00 UTC
     std::tm target_tm = parse_date(target_date);
-    target_tm.tm_hour = 5;  // NYC midnight ~= 05:00 UTC
+    target_tm.tm_hour = -utc_offset_hours;  // Convert offset to UTC hour of midnight
     std::time_t target_start = timegm(&target_tm);
     std::time_t target_end = target_start + 24 * 3600;
 
@@ -184,12 +187,13 @@ Result<WeatherResponse> LocalNbmClient::fetchFromGrid(double latitude,
                                                        double longitude,
                                                        const std::string& target_date,
                                                        const std::string& cycle_date,
-                                                       int cycle_hour) {
+                                                       int cycle_hour,
+                                                       int utc_offset_hours) {
     if (!grid_reader_) {
         return Error(ApiError::NetworkError, "Grid reader not available");
     }
 
-    auto hours = computeForecastHours(cycle_date, cycle_hour, target_date);
+    auto hours = computeForecastHours(cycle_date, cycle_hour, target_date, utc_offset_hours);
     if (hours.empty()) {
         return Error(ApiError::HttpError, "No forecast hours found for date");
     }
@@ -248,6 +252,7 @@ Result<WeatherResponse> LocalNbmClient::fetchFromGrid(double latitude,
 Result<WeatherResponse> LocalNbmClient::getForecast(double latitude,
                                                      double longitude,
                                                      const std::string& date,
+                                                     int utc_offset_hours,
                                                      const std::string& asOf_iso) {
     auto [cycle_date, cycle_hour] = findBestCycle(date, asOf_iso);
 
@@ -258,7 +263,7 @@ Result<WeatherResponse> LocalNbmClient::getForecast(double latitude,
             WeatherResponse resp;
             resp.latitude = forecast->latitude;
             resp.longitude = forecast->longitude;
-            resp.timezone = "America/New_York";
+            resp.timezone = "UTC";  // We're explicit about timezone now
             resp.daily.time = {date};
             resp.daily.temperature_2m_max = {forecast->temp_max_f};
             resp.daily.temperature_2m_min = {forecast->temp_min_f};
@@ -268,7 +273,7 @@ Result<WeatherResponse> LocalNbmClient::getForecast(double latitude,
 
     // Fall back to grid files
     if (grid_reader_) {
-        auto result = fetchFromGrid(latitude, longitude, date, cycle_date, cycle_hour);
+        auto result = fetchFromGrid(latitude, longitude, date, cycle_date, cycle_hour, utc_offset_hours);
         if (result.ok()) {
             return result;
         }
@@ -284,9 +289,10 @@ Result<WeatherResponse> LocalNbmClient::getForecast(double latitude,
 
 Result<WeatherResponse> LocalNbmClient::getActuals(double latitude,
                                                     double longitude,
-                                                    const std::string& date) {
+                                                    const std::string& date,
+                                                    int utc_offset_hours) {
     std::string asOf = date + "T23:59:00Z";
-    return getForecast(latitude, longitude, date, asOf);
+    return getForecast(latitude, longitude, date, utc_offset_hours, asOf);
 }
 
 }  // namespace predibloom::api

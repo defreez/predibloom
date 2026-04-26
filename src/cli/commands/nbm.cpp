@@ -190,7 +190,8 @@ int runNbmDownload(const core::Config& config,
             std::string as_of = core::computeAsOfIso(
                 date, sc->entry_day_offset, sc->effectiveEntryHour());
 
-            auto result = nbm_client.getForecast(sc->latitude, sc->longitude, date, as_of);
+            auto result = nbm_client.getForecast(sc->latitude, sc->longitude, date,
+                sc->utc_offset_hours, as_of);
             if (result.ok()) {
                 success++;
                 city_success++;

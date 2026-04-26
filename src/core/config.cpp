@@ -62,6 +62,9 @@ Config Config::loadFromFile(const std::string& path) {
                         if (series_json.contains("entry_day_offset")) {
                             ts.entry_day_offset = series_json["entry_day_offset"];
                         }
+                        if (series_json.contains("utc_offset_hours")) {
+                            ts.utc_offset_hours = series_json["utc_offset_hours"];
+                        }
                         if (series_json.contains("weather_source")) {
                             std::string ws = series_json["weather_source"];
                             if (ws == "local_nbm") {

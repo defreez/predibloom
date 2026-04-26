@@ -21,19 +21,23 @@ public:
     LocalNbmClient(const LocalNbmClient&) = delete;
     LocalNbmClient& operator=(const LocalNbmClient&) = delete;
 
-    // Forecast for a single local NY date.
+    // Forecast for a single local date.
+    // utc_offset_hours: timezone offset from UTC (e.g., -5 for EST, -8 for PST)
+    //                   Used to determine which hours of the day to fetch.
     // If asOf_iso is non-empty, restricts to forecasts issued on or before that moment
     // (ISO-8601 UTC, e.g., "2025-05-01T04:00:00Z").
     Result<WeatherResponse> getForecast(double latitude,
                                          double longitude,
                                          const std::string& date,
+                                         int utc_offset_hours,
                                          const std::string& asOf_iso = "");
 
-    // Shortest-lead (near-analysis) temps for a single local NY date, used as actuals.
+    // Shortest-lead (near-analysis) temps for a single local date, used as actuals.
     // For local NBM, this fetches with asOf = date + 23:59 to get the most recent forecast.
     Result<WeatherResponse> getActuals(double latitude,
                                         double longitude,
-                                        const std::string& date);
+                                        const std::string& date,
+                                        int utc_offset_hours);
 
     // Set the database path (for testing).
     void setDbPath(const std::string& path);
@@ -55,14 +59,16 @@ private:
     // Compute forecast hours needed to cover a target date.
     std::vector<int> computeForecastHours(const std::string& cycle_date,
                                            int cycle_hour,
-                                           const std::string& target_date);
+                                           const std::string& target_date,
+                                           int utc_offset_hours);
 
     // Fetch from grid files and cache to SQLite.
     Result<WeatherResponse> fetchFromGrid(double latitude,
                                            double longitude,
                                            const std::string& target_date,
                                            const std::string& cycle_date,
-                                           int cycle_hour);
+                                           int cycle_hour,
+                                           int utc_offset_hours);
 
     std::unique_ptr<ForecastDb> db_;
     std::unique_ptr<NbmGridReader> grid_reader_;

@@ -232,6 +232,7 @@ Result<TradesResponse> KalshiClient::getTrades(const GetTradesParams& params) {
     path_ss << API_BASE << "/markets/trades?ticker=" << params.ticker;
     if (params.limit) path_ss << "&limit=" << *params.limit;
     if (params.cursor) path_ss << "&cursor=" << *params.cursor;
+    if (params.min_ts) path_ss << "&min_ts=" << *params.min_ts;
     std::string path = path_ss.str();
 
     auto cache_key = HttpCache::key(API_HOST, path);
@@ -272,10 +273,17 @@ Result<TradesResponse> KalshiClient::getTrades(const GetTradesParams& params) {
 }
 
 Result<std::vector<Trade>> KalshiClient::getAllTrades(const std::string& ticker) {
+    return getTradesAfter(ticker, 0);
+}
+
+Result<std::vector<Trade>> KalshiClient::getTradesAfter(const std::string& ticker, int64_t min_ts) {
     std::vector<Trade> all_trades;
     GetTradesParams params;
     params.ticker = ticker;
     params.limit = 1000;
+    if (min_ts > 0) {
+        params.min_ts = min_ts;
+    }
 
     while (true) {
         auto result = getTrades(params);

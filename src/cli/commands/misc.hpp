@@ -9,4 +9,7 @@ namespace predibloom::cli {
 // Series command - list configured series with entry hours
 int runSeries(const core::Config& config);
 
+// Medford, Oregon forecast (MFR airport)
+int runMfr(const std::string& date);
+
 }  // namespace predibloom::cli

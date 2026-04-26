@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../api/kalshi_client.hpp"
 #include "../../core/config.hpp"
 #include <string>
 #include <vector>
@@ -24,8 +23,9 @@ struct BacktestOptions {
     std::vector<int> latency_sweep;        // For latency sweep: test multiple latencies
 };
 
+// Backtest always uses local SQLite cache (LocalKalshiClient).
+// Run 'kalshi sync' first to populate the cache.
 int runBacktest(const BacktestOptions& opts,
-                const core::Config& config,
-                api::KalshiClient& client);
+                const core::Config& config);
 
 }  // namespace predibloom::cli
