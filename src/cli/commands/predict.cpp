@@ -9,6 +9,8 @@
 #include <map>
 #include <vector>
 #include <cstdio>
+#include <thread>
+#include <chrono>
 
 namespace predibloom::cli {
 
@@ -84,6 +86,7 @@ int runPredict(const PredictOptions& opts,
 
     // Collect predictions for all series
     std::vector<Prediction> predictions;
+    std::vector<std::pair<std::string, std::string>> failures;  // label, reason
     std::string most_recent_forecast_time;
 
     size_t total = series_list.size();
@@ -126,6 +129,7 @@ int runPredict(const PredictOptions& opts,
             series_config->latitude, series_config->longitude, opts.date, as_of);
 
         if (!forecast_result.ok()) {
+            failures.push_back({series_config->label, "forecast: " + forecast_result.error().message});
             continue;
         }
 
@@ -139,17 +143,20 @@ int runPredict(const PredictOptions& opts,
             ? api::getMinTemperatureForDate(forecast_result.value(), opts.date)
             : api::getTemperatureForDate(forecast_result.value(), opts.date);
         if (!forecast_opt) {
+            failures.push_back({series_config->label, "no temp for date"});
             continue;
         }
 
         double forecast = *forecast_opt;
         double adjusted = forecast + effective_offset;
 
-        // Get markets
+        // Get markets (with delay to avoid rate limiting)
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
         api::GetMarketsParams params;
         params.series_ticker = series_config->series_ticker;
         auto markets_result = client.getAllMarkets(params);
         if (!markets_result.ok()) {
+            failures.push_back({series_config->label, "markets: " + markets_result.error().message});
             continue;
         }
 
@@ -164,6 +171,7 @@ int runPredict(const PredictOptions& opts,
         }
 
         if (day_markets.empty()) {
+            failures.push_back({series_config->label, "no markets for " + expected_event});
             continue;
         }
 
@@ -285,6 +293,13 @@ int runPredict(const PredictOptions& opts,
                 std::cout << "  " << p.ticker << "  " << p.label << " " << p.strike
                           << " @ " << (int)p.ask << "¢\n";
             }
+        }
+    }
+
+    if (!failures.empty()) {
+        std::cerr << "\nFailed (" << failures.size() << "):\n";
+        for (const auto& [label, reason] : failures) {
+            std::cerr << "  " << label << ": " << reason << "\n";
         }
     }
 
