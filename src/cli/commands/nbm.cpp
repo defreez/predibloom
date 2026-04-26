@@ -660,7 +660,7 @@ int runNbmAbout() {
     bool is_dst = core::PacificTime::isDst(now);
     std::string tz = is_dst ? "PDT" : "PST";
 
-    auto formatCycleTime = [is_dst](int utc_hour) -> std::string {
+    auto formatCycleTime = [](int utc_hour) -> std::string {
         // Create a DateTime for today at this UTC hour
         auto today = core::DateTime::now();
         auto dt = core::DateTime::parseDate(today.toDateString());
@@ -669,28 +669,33 @@ int runNbmAbout() {
         return core::PacificTime::formatTime(cycle_time, true);
     };
 
-    std::cout << DIM << "  ┌────────┬────────────┬──────────────┐\n";
-    std::cout << "  │ " << RESET << "Cycle" << DIM << "  │ " << RESET << "Issued" << DIM << "     │ " << RESET << "Available" << DIM << "    │\n";
-    std::cout << "  ├────────┼────────────┼──────────────┤\n" << RESET;
+    // Build table with fixed-width columns
+    // Col widths (excluding │): Cycle=7, Issued=12, Available=14
+    std::cout << DIM << "  ┌───────┬────────────┬──────────────┐\n" << RESET;
+    std::cout << DIM << "  │" << RESET << " Cycle " << DIM << "│" << RESET
+              << " Issued     " << DIM << "│" << RESET
+              << " Available    " << DIM << "│\n" << RESET;
+    std::cout << DIM << "  ├───────┼────────────┼──────────────┤\n" << RESET;
 
     constexpr int cycles[] = {1, 7, 13, 19};
     for (int c : cycles) {
-        std::string issued = formatCycleTime(c);
-        std::string avail = "~" + formatCycleTime(c + 2);
+        std::string issued = formatCycleTime(c) + " " + tz;
+        std::string avail = "~" + formatCycleTime(c + 2) + " " + tz;
 
-        char cycle_str[8];
-        std::snprintf(cycle_str, sizeof(cycle_str), "%02dZ", c);
+        // Pad to exact column widths (excluding leading space)
+        while (issued.length() < 11) issued += " ";
+        while (avail.length() < 13) avail += " ";
 
-        std::cout << DIM << "  │ " << RESET
-                  << " " << cycle_str
-                  << DIM << "   │ " << RESET
-                  << std::setw(7) << std::right << issued << " " << tz
-                  << DIM << " │ " << RESET
-                  << std::setw(8) << std::right << avail << " " << tz
-                  << DIM << " │\n" << RESET;
+        char cycle_str[16];
+        std::snprintf(cycle_str, sizeof(cycle_str), "  %02dZ  ", c);  // 7 chars total
+
+        std::cout << DIM << "  │" << RESET << cycle_str
+                  << DIM << "│" << RESET << " " << issued
+                  << DIM << "│" << RESET << " " << avail
+                  << DIM << "│\n" << RESET;
     }
 
-    std::cout << DIM << "  └────────┴────────────┴──────────────┘" << RESET << "\n\n";
+    std::cout << DIM << "  └───────┴────────────┴──────────────┘" << RESET << "\n\n";
 
     std::cout << YELLOW << "  Learn More" << RESET << "\n";
     std::cout << "  https://vlab.noaa.gov/web/mdl/nbm\n";
