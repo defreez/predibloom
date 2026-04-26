@@ -97,12 +97,15 @@ int main(int argc, char** argv) {
 
     // Backtest command options
     std::vector<std::string> backtest_series;
-    std::string backtest_start, backtest_end;
+    std::string backtest_start, backtest_end, backtest_algo;
     double backtest_margin = 0.0, backtest_min_price = 5.0, backtest_max_price = 40.0, backtest_trade_size = 0.0;
     int backtest_entry_hour = -1, backtest_exit_hour = -1, backtest_seed = -1, backtest_jitter = 3;
+    int backtest_latency = 0;
+    std::vector<int> backtest_latency_sweep;
     backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s)")->delimiter(',');
     backtest_cmd->add_option("--start", backtest_start, "Start date YYYY-MM-DD")->required();
     backtest_cmd->add_option("--end", backtest_end, "End date YYYY-MM-DD")->required();
+    backtest_cmd->add_option("--algo", backtest_algo, "Algorithm (simple, latency)")->default_val("")->check(CLI::IsMember({"", "simple", "latency"}));
     backtest_cmd->add_option("--margin", backtest_margin, "Min margin (°F)")->default_val(0.0);
     backtest_cmd->add_option("--min-price", backtest_min_price, "Min price (cents)")->default_val(5.0);
     backtest_cmd->add_option("--max-price", backtest_max_price, "Max price (cents)")->default_val(40.0);
@@ -111,6 +114,8 @@ int main(int argc, char** argv) {
     backtest_cmd->add_option("--exit-hour", backtest_exit_hour, "Exit hour UTC")->default_val(-1)->check(CLI::Range(-1, 23));
     backtest_cmd->add_option("--seed", backtest_seed, "RNG seed")->default_val(-1);
     backtest_cmd->add_option("--jitter", backtest_jitter, "Entry jitter +/- hours")->default_val(3)->check(CLI::Range(0, 12));
+    backtest_cmd->add_option("--latency", backtest_latency, "Latency algo: hours after cycle")->default_val(0)->check(CLI::Range(0, 24));
+    backtest_cmd->add_option("--latency-sweep", backtest_latency_sweep, "Latency algo: test multiple latencies")->delimiter(',');
 
     // Predict command options
     std::string predict_series, predict_date;
@@ -291,6 +296,7 @@ int main(int argc, char** argv) {
         opts.series = backtest_series;
         opts.start_date = backtest_start;
         opts.end_date = backtest_end;
+        opts.algo = backtest_algo;
         opts.margin = backtest_margin;
         opts.min_price = backtest_min_price;
         opts.max_price = backtest_max_price;
@@ -299,6 +305,8 @@ int main(int argc, char** argv) {
         opts.trade_size = backtest_trade_size;
         opts.jitter = backtest_jitter;
         opts.seed = backtest_seed;
+        opts.latency_hours = backtest_latency;
+        opts.latency_sweep = backtest_latency_sweep;
         return predibloom::cli::runBacktest(opts, config, client);
     }
 

@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <unistd.h>
 #include <array>
 #include <cstdio>
 #include <iostream>
@@ -19,10 +20,24 @@ namespace predibloom::cli {
 
 namespace {
 
+// Get path to nbm_fetch.py script relative to current working directory
+std::string getScriptPath() {
+    const char* paths[] = {
+        "scripts/nbm_fetch.py",           // Running from project root
+        "../scripts/nbm_fetch.py",        // Running from build/
+    };
+    for (const char* p : paths) {
+        if (access(p, F_OK) == 0) {
+            return p;
+        }
+    }
+    return "scripts/nbm_fetch.py";
+}
+
 // Run nbm_fetch.py script with given arguments and parse JSON output.
 int runScriptJson(const std::vector<std::string>& args, nlohmann::json& parsed) {
     std::ostringstream cmd;
-    cmd << "python3 scripts/nbm_fetch.py";
+    cmd << "uv run python " << getScriptPath();
     for (const auto& a : args) {
         cmd << " " << a;
     }
@@ -334,7 +349,7 @@ namespace {
 // Run Python script with streaming output (not JSON).
 int runScriptStreaming(const std::vector<std::string>& args) {
     std::ostringstream cmd;
-    cmd << "python3 scripts/nbm_fetch.py";
+    cmd << "uv run python " << getScriptPath();
     for (const auto& a : args) {
         cmd << " " << a;
     }

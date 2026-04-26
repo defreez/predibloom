@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../api/types.hpp"
+#include <cmath>
 #include <optional>
 #include <string>
 #include <cctype>
@@ -33,13 +34,15 @@ struct Bracket {
 
     // Check if temperature falls in this bracket
     // Uses bracket boundaries (cap is exclusive internally, so boundary is cap-1)
+    // Rounds temp to nearest integer since Kalshi settles on integer temps
     bool contains(double temp) const {
+        double rounded = std::round(temp);
         if (floor && cap) {
-            return temp >= *floor && temp <= (*cap - 1);
+            return rounded >= *floor && rounded <= (*cap - 1);
         } else if (floor && !cap) {
-            return temp >= *floor;
+            return rounded >= *floor;
         } else if (!floor && cap) {
-            return temp <= (*cap - 1);
+            return rounded <= (*cap - 1);
         }
         return false;
     }
@@ -47,9 +50,11 @@ struct Bracket {
     // Distance from nearest edge (for margin calculation)
     // Positive = inside bracket, negative = outside bracket
     // Cap is exclusive internally, so boundary is (cap - 1)
+    // Uses rounded temp since Kalshi settles on integer temps
     double marginFrom(double temp) const {
-        double dist_from_floor = floor ? (temp - *floor) : 999.0;
-        double dist_from_cap = cap ? ((*cap - 1) - temp) : 999.0;
+        double rounded = std::round(temp);
+        double dist_from_floor = floor ? (rounded - *floor) : 999.0;
+        double dist_from_cap = cap ? ((*cap - 1) - rounded) : 999.0;
         return std::min(dist_from_floor, dist_from_cap);
     }
 };

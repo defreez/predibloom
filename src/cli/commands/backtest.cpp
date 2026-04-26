@@ -4,13 +4,13 @@
 #include "../../api/nws_client.hpp"
 #include "../../core/time_utils.hpp"
 #include "../../core/weather_comparison.hpp"
+#include "../../core/backtest_algo.hpp"
 
 #include <iostream>
 #include <iomanip>
 #include <map>
 #include <vector>
 #include <algorithm>
-#include <random>
 #include <cstdio>
 
 namespace predibloom::cli {
@@ -32,6 +32,10 @@ struct Trade {
     bool won;
     bool is_bounded;
     double pnl;
+
+    // Latency algo metadata
+    std::string cycle_used;
+    int latency_hours;
 };
 
 struct SkipReasons {
@@ -44,15 +48,30 @@ struct SkipReasons {
     int price_too_low = 0;
     int trade_fetch_error = 0;
     int no_trades_at_exit = 0;
+    int no_cycle_available = 0;
+
     int total() const {
         return no_forecast + no_nws_data + between_brackets +
                margin_too_small + no_trades_at_entry + no_trades_at_exit +
-               price_too_high + price_too_low + trade_fetch_error;
+               price_too_high + price_too_low + trade_fetch_error + no_cycle_available;
+    }
+
+    void addFromReason(const std::string& reason) {
+        if (reason == core::SkipReason::NoForecast) no_forecast++;
+        else if (reason == core::SkipReason::BetweenBrackets) between_brackets++;
+        else if (reason == core::SkipReason::MarginTooSmall) margin_too_small++;
+        else if (reason == core::SkipReason::NoTradesAtEntry) no_trades_at_entry++;
+        else if (reason == core::SkipReason::NoTradesAtExit) no_trades_at_exit++;
+        else if (reason == core::SkipReason::PriceTooHigh) price_too_high++;
+        else if (reason == core::SkipReason::PriceTooLow) price_too_low++;
+        else if (reason == core::SkipReason::NoCycleAvailable) no_cycle_available++;
     }
 };
 
-void printParameters(const BacktestOptions& opts, const std::vector<std::string>& series) {
+void printParameters(const BacktestOptions& opts, const std::vector<std::string>& series,
+                     const std::string& algo_name) {
     std::cerr << "Backtest parameters:\n";
+    std::cerr << "  Algo: " << (algo_name.empty() ? "simple" : algo_name) << "\n";
     std::cerr << "  Series: ";
     for (size_t i = 0; i < series.size(); i++) {
         if (i > 0) std::cerr << ", ";
@@ -63,24 +82,37 @@ void printParameters(const BacktestOptions& opts, const std::vector<std::string>
     std::cerr << "  Margin: " << opts.margin << "°F (min distance from bracket edge)\n";
     std::cerr << "  Price range: " << opts.min_price << "¢ - " << opts.max_price << "¢\n";
 
-    if (opts.entry_hour >= 0) {
-        int pt_hour = (opts.entry_hour - 7 + 24) % 24;
-        std::string pt_ampm = (pt_hour >= 12) ? "pm" : "am";
-        int pt_hour_12 = (pt_hour % 12 == 0) ? 12 : (pt_hour % 12);
-        std::string day_note = (opts.entry_hour < 7) ? " (previous day)" : "";
-        std::cerr << "  Entry: " << opts.entry_hour << ":00 UTC = " << pt_hour_12 << pt_ampm << " PT" << day_note << "\n";
+    if (opts.algo == "latency") {
+        if (!opts.latency_sweep.empty()) {
+            std::cerr << "  Latency sweep: ";
+            for (size_t i = 0; i < opts.latency_sweep.size(); i++) {
+                if (i > 0) std::cerr << ", ";
+                std::cerr << opts.latency_sweep[i] << "hr";
+            }
+            std::cerr << "\n";
+        } else {
+            std::cerr << "  Latency: " << opts.latency_hours << " hours after cycle\n";
+        }
     } else {
-        std::cerr << "  Entry: per-series from config (high=5 UTC/9pm PT, low=17 UTC/9am PT)\n";
-    }
+        if (opts.entry_hour >= 0) {
+            int pt_hour = (opts.entry_hour - 7 + 24) % 24;
+            std::string pt_ampm = (pt_hour >= 12) ? "pm" : "am";
+            int pt_hour_12 = (pt_hour % 12 == 0) ? 12 : (pt_hour % 12);
+            std::string day_note = (opts.entry_hour < 7) ? " (previous day)" : "";
+            std::cerr << "  Entry: " << opts.entry_hour << ":00 UTC = " << pt_hour_12 << pt_ampm << " PT" << day_note << "\n";
+        } else {
+            std::cerr << "  Entry: per-series from config (high=5 UTC/9pm PT, low=17 UTC/9am PT)\n";
+        }
 
-    if (opts.exit_hour >= 0) {
-        int exit_pt = (opts.exit_hour - 7 + 24) % 24;
-        std::string exit_ampm = (exit_pt >= 12) ? "pm" : "am";
-        int exit_12 = (exit_pt % 12 == 0) ? 12 : (exit_pt % 12);
-        std::string exit_day_note = (opts.exit_hour < 7) ? " (previous day)" : "";
-        std::cerr << "  Exit: " << opts.exit_hour << ":00 UTC = " << exit_12 << exit_ampm << " PT" << exit_day_note << "\n";
-    } else {
-        std::cerr << "  Exit: hold to settlement\n";
+        if (opts.exit_hour >= 0) {
+            int exit_pt = (opts.exit_hour - 7 + 24) % 24;
+            std::string exit_ampm = (exit_pt >= 12) ? "pm" : "am";
+            int exit_12 = (exit_pt % 12 == 0) ? 12 : (exit_pt % 12);
+            std::string exit_day_note = (opts.exit_hour < 7) ? " (previous day)" : "";
+            std::cerr << "  Exit: " << opts.exit_hour << ":00 UTC = " << exit_12 << exit_ampm << " PT" << exit_day_note << "\n";
+        } else {
+            std::cerr << "  Exit: hold to settlement\n";
+        }
     }
 
     if (opts.trade_size > 0) {
@@ -101,7 +133,8 @@ void printParameters(const BacktestOptions& opts, const std::vector<std::string>
 
 void printResults(const std::vector<Trade>& trades, const SkipReasons& skip,
                   double total_pnl_dollars, double total_deployed,
-                  int wins, int losses, bool show_series, bool show_exit) {
+                  int wins, int losses, bool show_series, bool show_exit,
+                  bool show_latency) {
     std::cout << "\n=== BACKTEST RESULTS ===\n\n";
 
     if (show_series) {
@@ -115,13 +148,16 @@ void printResults(const std::vector<Trade>& trades, const SkipReasons& skip,
     if (show_exit) {
         std::cout << std::setw(7) << "Exit";
     }
+    if (show_latency) {
+        std::cout << std::setw(8) << "Latency";
+    }
     std::cout << std::setw(6) << "Ctrs"
               << std::setw(7) << "Result"
               << std::setw(10) << "P&L"
               << std::setw(10) << "Balance"
               << "\n";
 
-    int line_width = 82 + (show_series ? 12 : 0) + (show_exit ? 7 : 0);
+    int line_width = 82 + (show_series ? 12 : 0) + (show_exit ? 7 : 0) + (show_latency ? 8 : 0);
     std::cout << std::string(line_width, '-') << "\n";
 
     double running_balance = 0;
@@ -140,13 +176,17 @@ void printResults(const std::vector<Trade>& trades, const SkipReasons& skip,
             entry_pt_str = std::to_string(pt12) + ampm;
         }
 
+        std::string nws_str = (t.nws_actual == -999) ? "-" : std::to_string(t.nws_actual);
         std::cout << std::left << std::setw(12) << t.date
                   << std::setw(10) << t.strike
-                  << std::setw(6) << t.nws_actual
+                  << std::setw(6) << nws_str
                   << std::setw(9) << entry_pt_str
                   << std::setw(7) << (std::to_string(static_cast<int>(t.entry_price)) + "c");
         if (show_exit) {
             std::cout << std::setw(7) << (std::to_string(static_cast<int>(t.exit_price)) + "c");
+        }
+        if (show_latency) {
+            std::cout << std::setw(8) << (std::to_string(t.latency_hours) + "hr");
         }
         char pnl_buf[16], bal_buf[16];
         snprintf(pnl_buf, sizeof(pnl_buf), "%+.2f", t.pnl);
@@ -215,6 +255,8 @@ void printResults(const std::vector<Trade>& trades, const SkipReasons& skip,
             std::cout << "    price too high:     " << skip.price_too_high << "\n";
         if (skip.price_too_low > 0)
             std::cout << "    price too low:      " << skip.price_too_low << "\n";
+        if (skip.no_cycle_available > 0)
+            std::cout << "    no cycle available: " << skip.no_cycle_available << "\n";
         if (skip.trade_fetch_error > 0)
             std::cout << "    trade fetch error:  " << skip.trade_fetch_error << "\n";
     }
@@ -223,6 +265,77 @@ void printResults(const std::vector<Trade>& trades, const SkipReasons& skip,
 
     double roi = total_deployed > 0 ? (total_pnl_dollars / total_deployed * 100) : 0;
     std::cout << "  ROI: " << std::showpos << std::setprecision(1) << roi << "%" << std::noshowpos << "\n";
+}
+
+void printLatencySweep(const std::map<int, std::vector<Trade>>& trades_by_latency) {
+    std::cout << "\n=== LATENCY SWEEP RESULTS ===\n\n";
+
+    std::cout << std::left
+              << std::setw(10) << "Latency"
+              << std::setw(8) << "Trades"
+              << std::setw(8) << "Wins"
+              << std::setw(10) << "WinRate"
+              << std::setw(12) << "P&L"
+              << std::setw(10) << "ROI"
+              << "\n";
+    std::cout << std::string(58, '-') << "\n";
+
+    std::vector<std::pair<int, double>> latency_roi;
+
+    for (const auto& [latency, trades] : trades_by_latency) {
+        int bucket_wins = 0;
+        double bucket_pnl = 0;
+        double bucket_deployed = 0;
+
+        for (const auto& t : trades) {
+            if (t.won) bucket_wins++;
+            bucket_pnl += t.pnl;
+            bucket_deployed += (t.contracts * t.entry_price) / 100.0;
+        }
+
+        int n = static_cast<int>(trades.size());
+        double win_rate = n > 0 ? (100.0 * bucket_wins / n) : 0;
+        double roi = bucket_deployed > 0 ? (100.0 * bucket_pnl / bucket_deployed) : 0;
+
+        latency_roi.push_back({latency, roi});
+
+        char pnl_buf[16], roi_buf[16];
+        snprintf(pnl_buf, sizeof(pnl_buf), "$%+.2f", bucket_pnl);
+        snprintf(roi_buf, sizeof(roi_buf), "%+.1f%%", roi);
+
+        std::cout << std::left
+                  << std::setw(10) << (std::to_string(latency) + "hr")
+                  << std::setw(8) << n
+                  << std::setw(8) << bucket_wins
+                  << std::setw(10) << (std::to_string(static_cast<int>(win_rate)) + "%")
+                  << std::setw(12) << pnl_buf
+                  << std::setw(10) << roi_buf
+                  << "\n";
+    }
+
+    // Calculate edge half-life (latency at which ROI drops to half of max)
+    if (latency_roi.size() >= 2) {
+        double max_roi = 0;
+        for (const auto& [lat, roi] : latency_roi) {
+            if (roi > max_roi) max_roi = roi;
+        }
+
+        if (max_roi > 0) {
+            double half_roi = max_roi / 2;
+            for (size_t i = 1; i < latency_roi.size(); i++) {
+                if (latency_roi[i].second < half_roi && latency_roi[i-1].second >= half_roi) {
+                    // Linear interpolation
+                    double t = (latency_roi[i-1].second - half_roi) /
+                               (latency_roi[i-1].second - latency_roi[i].second);
+                    double half_life = latency_roi[i-1].first +
+                                       t * (latency_roi[i].first - latency_roi[i-1].first);
+                    std::cout << "\nEdge half-life: ~" << std::fixed << std::setprecision(1)
+                              << half_life << " hours\n";
+                    break;
+                }
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -269,179 +382,252 @@ int runBacktest(const BacktestOptions& opts,
         return 1;
     }
 
+    // Handle latency sweep mode
+    std::vector<int> latencies_to_test;
+    if (!opts.latency_sweep.empty()) {
+        latencies_to_test = opts.latency_sweep;
+    } else {
+        latencies_to_test.push_back(opts.latency_hours);
+    }
+
+    // For sweep mode, we'll collect trades per latency
+    std::map<int, std::vector<Trade>> trades_by_latency;
+    bool is_sweep = opts.latency_sweep.size() > 1;
+
     api::NwsClient nws;
     client.setCaching(true);
     nws.setCaching(true);
 
-    printParameters(opts, series_list);
+    std::string algo_name = opts.algo.empty() ? "simple" : opts.algo;
+    printParameters(opts, series_list, algo_name);
 
-    // Initialize RNG
-    std::mt19937 rng(opts.seed >= 0 ? static_cast<unsigned>(opts.seed) : std::random_device{}());
-    std::uniform_int_distribution<int> jitter_dist(-opts.jitter, opts.jitter);
-
-    std::vector<Trade> trades;
+    // Aggregate results across all latencies
+    std::vector<Trade> all_trades;
     double total_pnl_dollars = 0;
     double total_deployed = 0;
     int wins = 0, losses = 0;
     SkipReasons skip;
 
-    for (const auto& current_series : series_list) {
-        auto* series_config = config.findSeries(current_series);
+    for (int current_latency : latencies_to_test) {
+        // Build algo config
+        core::AlgoConfig algo_cfg;
+        algo_cfg.margin = opts.margin;
+        algo_cfg.min_price = opts.min_price;
+        algo_cfg.max_price = opts.max_price;
+        algo_cfg.entry_hour = opts.entry_hour;
+        algo_cfg.exit_hour = opts.exit_hour;
+        algo_cfg.trade_size = opts.trade_size;
+        algo_cfg.jitter = opts.jitter;
+        algo_cfg.seed = opts.seed;
+        algo_cfg.latency_hours = current_latency;
 
-        auto weather_client = api::WeatherClient::create(
-            series_config->weather_source, config.gribstream_api_token);
-        weather_client->setCaching(true);
+        auto algo = core::createAlgo(algo_name, algo_cfg);
 
-        api::GetMarketsParams params;
-        params.series_ticker = current_series;
-        auto markets_result = client.getAllMarkets(params);
-        if (!markets_result.ok()) {
-            std::cerr << "Error fetching markets: " << markets_result.error().message << "\n";
-            return 1;
-        }
+        for (const auto& current_series : series_list) {
+            auto* series_config = config.findSeries(current_series);
 
-        std::map<std::string, std::vector<api::Market>> markets_by_date;
-        for (const auto& market : markets_result.value()) {
-            if (market.result.empty()) continue;
-            std::string date = core::parseDateFromEventTicker(market.event_ticker);
-            if (date.empty() || date < opts.start_date || date > opts.end_date) continue;
-            markets_by_date[date].push_back(market);
-        }
+            auto weather_client = api::WeatherClient::create(
+                series_config->weather_source, config.gribstream_api_token);
+            weather_client->setCaching(true);
 
-        std::cerr << current_series << ": " << markets_by_date.size() << " trading days\n";
+            api::GetMarketsParams params;
+            params.series_ticker = current_series;
+            auto markets_result = client.getAllMarkets(params);
+            if (!markets_result.ok()) {
+                std::cerr << "Error fetching markets: " << markets_result.error().message << "\n";
+                return 1;
+            }
 
-        // Fetch NWS data
-        bool is_low = series_config->isLowTemp();
-        int start_year = std::stoi(opts.start_date.substr(0, 4));
-        int end_year = std::stoi(opts.end_date.substr(0, 4));
-        std::map<std::string, int> nws_temps;
+            std::map<std::string, std::vector<api::Market>> markets_by_date;
+            for (const auto& market : markets_result.value()) {
+                if (market.result.empty()) continue;
+                std::string date = core::parseDateFromEventTicker(market.event_ticker);
+                if (date.empty() || date < opts.start_date || date > opts.end_date) continue;
+                markets_by_date[date].push_back(market);
+            }
 
-        for (int year = start_year; year <= end_year; year++) {
-            auto nws_result = nws.getCliData(series_config->nws_station, year);
-            if (nws_result.ok()) {
-                for (const auto& obs : nws_result.value()) {
-                    if (obs.date >= opts.start_date && obs.date <= opts.end_date) {
-                        nws_temps[obs.date] = is_low ? obs.low : obs.high;
+            if (!is_sweep) {
+                std::cerr << current_series << ": " << markets_by_date.size() << " trading days\n";
+            }
+
+            // Fetch NWS data
+            bool is_low = series_config->isLowTemp();
+            int start_year = std::stoi(opts.start_date.substr(0, 4));
+            int end_year = std::stoi(opts.end_date.substr(0, 4));
+            std::map<std::string, int> nws_temps;
+
+            for (int year = start_year; year <= end_year; year++) {
+                auto nws_result = nws.getCliData(series_config->nws_station, year);
+                if (nws_result.ok()) {
+                    for (const auto& obs : nws_result.value()) {
+                        if (obs.date >= opts.start_date && obs.date <= opts.end_date) {
+                            nws_temps[obs.date] = is_low ? obs.low : obs.high;
+                        }
                     }
                 }
             }
-        }
 
-        if (nws_temps.empty()) {
-            skip.no_nws_data += markets_by_date.size();
-            continue;
-        }
+            // NWS data is optional - used for display only, not for settlement
+            // Settlement outcome comes from market.result
 
-        for (const auto& [date, day_markets] : markets_by_date) {
-            std::string as_of = core::computeAsOfIso(
-                date, series_config->entry_day_offset, series_config->effectiveEntryHour());
-            auto forecast_result = weather_client->getForecast(
-                series_config->latitude, series_config->longitude, date, as_of);
-
-            if (!forecast_result.ok()) { skip.no_forecast++; continue; }
-
-            auto forecast_opt = is_low
-                ? api::getMinTemperatureForDate(forecast_result.value(), date)
-                : api::getTemperatureForDate(forecast_result.value(), date);
-            if (!forecast_opt) { skip.no_forecast++; continue; }
-
-            double forecast = *forecast_opt;
-            double adjusted = forecast + series_config->offset;
-
-            if (nws_temps.find(date) == nws_temps.end()) { skip.no_nws_data++; continue; }
-            int nws_actual = nws_temps.at(date);
-
-            std::vector<Bracket> brackets;
-            for (const auto& market : day_markets) {
-                brackets.push_back(parseBracket(market));
-            }
-
-            const Bracket* target = nullptr;
-            double margin_from_edge = 0;
-            for (const auto& b : brackets) {
-                if (b.contains(adjusted)) {
-                    margin_from_edge = b.marginFrom(adjusted);
-                    target = &b;
-                    break;
+            for (const auto& [date, day_markets] : markets_by_date) {
+                // NWS actual is optional - use -999 as sentinel for missing
+                int nws_actual = -999;
+                if (nws_temps.find(date) != nws_temps.end()) {
+                    nws_actual = nws_temps.at(date);
                 }
-            }
 
-            if (!target) { skip.between_brackets++; continue; }
-            if (margin_from_edge < opts.margin) { skip.margin_too_small++; continue; }
+                // Get default forecast
+                std::string as_of = core::computeAsOfIso(
+                    date, series_config->entry_day_offset, series_config->effectiveEntryHour());
+                auto forecast_result = weather_client->getForecast(
+                    series_config->latitude, series_config->longitude, date, as_of);
 
-            auto trades_result = client.getAllTrades(target->market->ticker);
-            if (!trades_result.ok()) { skip.trade_fetch_error++; continue; }
-
-            int effective_entry_hour = (opts.entry_hour >= 0)
-                ? opts.entry_hour : series_config->effectiveEntryHour();
-            int delta = (opts.jitter > 0) ? jitter_dist(rng) : 0;
-            std::string target_hour = core::computeEntryDatetimeWithJitter(
-                date, series_config->entry_day_offset, effective_entry_hour, delta);
-
-            double entry_price = -1;
-            std::string entry_time;
-            for (const auto& trade : trades_result.value()) {
-                std::string trade_hour = trade.created_time.substr(0, 13);
-                if (trade_hour <= target_hour && (entry_time.empty() || trade_hour > entry_time)) {
-                    entry_price = trade.yes_price_cents();
-                    entry_time = trade_hour;
+                std::optional<double> forecast_opt;
+                if (forecast_result.ok()) {
+                    forecast_opt = is_low
+                        ? api::getMinTemperatureForDate(forecast_result.value(), date)
+                        : api::getTemperatureForDate(forecast_result.value(), date);
                 }
-            }
 
-            if (entry_price < 0) { skip.no_trades_at_entry++; continue; }
-            if (entry_price > opts.max_price) { skip.price_too_high++; continue; }
-            if (entry_price < opts.min_price) { skip.price_too_low++; continue; }
+                double forecast = forecast_opt.value_or(0);
+                double adjusted = forecast + series_config->offset;
 
-            bool is_bounded = target->floor.has_value() && target->cap.has_value();
-            double exit_price = -1;
-            bool won;
-            double pnl;
+                // Find the target bracket to get trades
+                std::vector<cli::Bracket> brackets;
+                for (const auto& market : day_markets) {
+                    brackets.push_back(cli::parseBracket(market));
+                }
 
-            if (opts.exit_hour >= 0) {
-                char exit_buf[3];
-                snprintf(exit_buf, sizeof(exit_buf), "%02d", opts.exit_hour);
-                std::string exit_target_hour = date + "T" + exit_buf;
-
-                std::string exit_time;
-                for (const auto& trade : trades_result.value()) {
-                    std::string trade_hour = trade.created_time.substr(0, 13);
-                    if (trade_hour <= exit_target_hour && (exit_time.empty() || trade_hour > exit_time)) {
-                        exit_price = trade.yes_price_cents();
-                        exit_time = trade_hour;
+                const cli::Bracket* target_bracket = nullptr;
+                for (const auto& b : brackets) {
+                    if (b.contains(adjusted)) {
+                        target_bracket = &b;
+                        break;
                     }
                 }
 
-                if (exit_price < 0) { skip.no_trades_at_exit++; continue; }
-                pnl = exit_price - entry_price;
-                won = (pnl > 0);
-            } else {
-                won = (target->market->result == "yes");
-                pnl = won ? (100 - entry_price) : (-entry_price);
+                // Get trades for the target bracket (if any)
+                std::vector<api::Trade> bracket_trades;
+                if (target_bracket) {
+                    auto trades_result = client.getAllTrades(target_bracket->market->ticker);
+                    if (!trades_result.ok()) {
+                        skip.trade_fetch_error++;
+                        continue;
+                    }
+                    bracket_trades = trades_result.value();
+                }
+
+                // Build trade context
+                core::TradeContext ctx;
+                ctx.date = date;
+                ctx.series = series_config;
+                ctx.markets = &day_markets;
+                ctx.trades = &bracket_trades;
+                ctx.nws_actual = nws_actual;
+                ctx.default_forecast = forecast_opt;
+                ctx.adjusted_forecast = adjusted;
+
+                // Forecast accessor for latency algo (could fetch cycle-specific forecasts)
+                ctx.getForecast = [&](const std::string& cycle_date, int cycle_hour)
+                    -> std::optional<double> {
+                    // For now, return the default forecast
+                    // TODO: Implement cycle-specific forecast lookup from local NBM cache
+                    return forecast_opt;
+                };
+
+                // Evaluate with algo
+                auto decision = algo->evaluate(ctx);
+
+                if (!decision.enter) {
+                    skip.addFromReason(decision.skip_reason);
+                    continue;
+                }
+
+                // Re-fetch trades for the chosen ticker if different from target_bracket
+                std::vector<api::Trade> decision_trades = bracket_trades;
+                if (decision.ticker != (target_bracket ? target_bracket->market->ticker : "")) {
+                    auto trades_result = client.getAllTrades(decision.ticker);
+                    if (!trades_result.ok()) {
+                        skip.trade_fetch_error++;
+                        continue;
+                    }
+                    decision_trades = trades_result.value();
+                }
+
+                // Find the market for the decision
+                const api::Market* decision_market = nullptr;
+                for (const auto& m : day_markets) {
+                    if (m.ticker == decision.ticker) {
+                        decision_market = &m;
+                        break;
+                    }
+                }
+
+                if (!decision_market) {
+                    skip.trade_fetch_error++;
+                    continue;
+                }
+
+                // Compute P&L
+                bool won;
+                double pnl;
+                if (decision.exit_time == "settlement") {
+                    won = (decision_market->result == "yes");
+                    pnl = won ? (100 - decision.entry_price) : (-decision.entry_price);
+                } else {
+                    pnl = decision.exit_price - decision.entry_price;
+                    won = (pnl > 0);
+                }
+
+                double trade_size = (algo_cfg.trade_size > 0)
+                    ? algo_cfg.trade_size
+                    : (10.0 * decision.margin_from_edge);
+                double pnl_dollars = (pnl * decision.contracts) / 100.0;
+
+                Trade t;
+                t.series = current_series;
+                t.date = date;
+                t.ticker = decision.ticker;
+                t.strike = decision.strike;
+                t.forecast = forecast;
+                t.adjusted = adjusted;
+                t.entry_time = decision.entry_time;
+                t.entry_price = decision.entry_price;
+                t.exit_price = decision.exit_price;
+                t.contracts = decision.contracts;
+                t.nws_actual = nws_actual;
+                t.won = won;
+                t.is_bounded = decision.is_bounded;
+                t.pnl = pnl_dollars;
+                t.cycle_used = decision.cycle_used;
+                t.latency_hours = decision.latency_hours;
+
+                if (is_sweep) {
+                    trades_by_latency[current_latency].push_back(t);
+                } else {
+                    all_trades.push_back(t);
+                }
+
+                total_pnl_dollars += pnl_dollars;
+                total_deployed += trade_size;
+                if (won) wins++; else losses++;
             }
-
-            double trade_size = (opts.trade_size > 0) ? opts.trade_size : (10.0 * margin_from_edge);
-            int contracts = static_cast<int>((trade_size * 100) / entry_price);
-            if (contracts < 1) contracts = 1;
-            double pnl_dollars = (pnl * contracts) / 100.0;
-
-            Trade t{current_series, date, target->market->ticker, target->displayString(),
-                    forecast, adjusted, entry_time, entry_price, exit_price, contracts,
-                    nws_actual, won, is_bounded, pnl_dollars};
-            trades.push_back(t);
-
-            total_pnl_dollars += pnl_dollars;
-            total_deployed += trade_size;
-            if (won) wins++; else losses++;
         }
     }
 
-    std::sort(trades.begin(), trades.end(), [](const Trade& a, const Trade& b) {
-        if (a.date != b.date) return a.date < b.date;
-        return a.series < b.series;
-    });
+    if (is_sweep) {
+        printLatencySweep(trades_by_latency);
+    } else {
+        std::sort(all_trades.begin(), all_trades.end(), [](const Trade& a, const Trade& b) {
+            if (a.date != b.date) return a.date < b.date;
+            return a.series < b.series;
+        });
 
-    printResults(trades, skip, total_pnl_dollars, total_deployed, wins, losses,
-                 series_list.size() > 1, opts.exit_hour >= 0);
+        bool show_latency = (algo_name == "latency");
+        printResults(all_trades, skip, total_pnl_dollars, total_deployed, wins, losses,
+                     series_list.size() > 1, opts.exit_hour >= 0, show_latency);
+    }
 
     return 0;
 }

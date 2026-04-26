@@ -19,6 +19,11 @@ struct BacktestOptions {
     double trade_size = 0; // 0 = 10x margin
     int jitter = 0;
     int seed = -1;
+
+    // Algo selection
+    std::string algo;                      // "simple" (default), "latency"
+    int latency_hours = 0;                 // For latency algo: hours after cycle availability
+    std::vector<int> latency_sweep;        // For latency sweep: test multiple latencies
 };
 
 int runBacktest(const BacktestOptions& opts,

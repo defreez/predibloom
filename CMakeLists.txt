@@ -73,6 +73,9 @@ add_library(predibloom_core STATIC
     src/core/service.cpp
     src/core/config.cpp
     src/core/weather_comparison.cpp
+    src/core/backtest_algo.cpp
+    src/core/simple_algo.cpp
+    src/core/latency_algo.cpp
 )
 
 target_include_directories(predibloom_core PUBLIC
