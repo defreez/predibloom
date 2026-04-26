@@ -3,6 +3,9 @@
 #include <iomanip>
 #include <cstdio>
 #include <cctype>
+#include <unordered_map>
+#include <thread>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 namespace predibloom::cli {
@@ -37,59 +40,146 @@ int runPortfolioBalance(const core::Config& config, api::KalshiClient& client) {
     return 0;
 }
 
-int runPortfolioPositions(const core::Config& config, api::KalshiClient& client) {
+int runPortfolioPositions(const core::Config& config, api::KalshiClient& client, int watch_interval) {
     if (int err = checkAuth(config, client)) return err;
 
-    auto positions_result = client.getAllPositions();
-    if (!positions_result.ok()) {
-        std::cerr << "Error fetching positions: " << positions_result.error().message << "\n";
-        return 1;
-    }
-
-    std::vector<api::Position> open_positions;
-    for (const auto& p : positions_result.value()) {
-        if (p.position() != 0) {
-            open_positions.push_back(p);
-        }
-    }
-
-    if (open_positions.empty()) {
-        std::cout << "No open positions\n";
-        return 0;
-    }
-
-    std::cout << std::left
-              << std::setw(36) << "Ticker"
-              << std::right
-              << std::setw(5) << "Pos"
-              << std::setw(10) << "Exposure"
-              << std::setw(10) << "Realized"
-              << std::setw(10) << "Fees"
-              << "\n";
-    std::cout << std::string(71, '-') << "\n";
-
-    for (const auto& p : open_positions) {
-        std::string ticker_display = p.ticker;
-        if (ticker_display.size() > 34) {
-            ticker_display = ticker_display.substr(0, 34);
+    while (true) {
+        // Clear screen if in watch mode
+        if (watch_interval > 0) {
+            std::cout << "\033[2J\033[H" << std::flush;
         }
 
-        char exp_buf[16], pnl_buf[16], fee_buf[16];
-        snprintf(exp_buf, sizeof(exp_buf), "$%.2f", p.exposure_cents() / 100.0);
-        snprintf(pnl_buf, sizeof(pnl_buf), "$%.2f", p.realized_pnl_cents() / 100.0);
-        snprintf(fee_buf, sizeof(fee_buf), "$%.2f", p.fees_cents() / 100.0);
+        auto positions_result = client.getAllPositions();
+        if (!positions_result.ok()) {
+            std::cerr << "Error fetching positions: " << positions_result.error().message << "\n";
+            if (watch_interval > 0) {
+                std::this_thread::sleep_for(std::chrono::seconds(watch_interval));
+                continue;
+            }
+            return 1;
+        }
+
+        std::vector<api::Position> open_positions;
+        for (const auto& p : positions_result.value()) {
+            if (p.position() != 0) {
+                open_positions.push_back(p);
+            }
+        }
+
+        if (open_positions.empty()) {
+            std::cout << "No open positions\n";
+            if (watch_interval > 0) {
+                std::this_thread::sleep_for(std::chrono::seconds(watch_interval));
+                continue;
+            }
+            return 0;
+        }
+
+        // Fetch current prices for all positions via orderbook
+        std::unordered_map<std::string, double> prices;  // ticker -> yes_bid_cents
+        for (const auto& p : open_positions) {
+            auto ob_result = client.getOrderbook(p.ticker);
+            if (ob_result.ok() && !ob_result.value().yes.empty()) {
+                // yes array is sorted ascending, last element is highest bid
+                prices[p.ticker] = ob_result.value().yes.back().price_cents();
+            }
+        }
 
         std::cout << std::left
-                  << std::setw(36) << ticker_display
+                  << std::setw(36) << "Ticker"
                   << std::right
-                  << std::setw(5) << p.position()
-                  << std::setw(10) << exp_buf
-                  << std::setw(10) << pnl_buf
-                  << std::setw(10) << fee_buf
+                  << std::setw(5) << "Pos"
+                  << std::setw(10) << "Mkt Value"
+                  << std::setw(10) << "P/L"
+                  << std::setw(10) << "Fees"
                   << "\n";
+        std::cout << std::string(71, '-') << "\n";
+
+        double total_mkt_value = 0;
+        double total_pl = 0;
+        for (const auto& p : open_positions) {
+            std::string ticker_display = p.ticker;
+            if (ticker_display.size() > 34) {
+                ticker_display = ticker_display.substr(0, 34);
+            }
+
+            double mkt_value = 0;
+            auto it = prices.find(p.ticker);
+            if (it != prices.end()) {
+                mkt_value = p.position() * it->second / 100.0;
+            }
+            total_mkt_value += mkt_value;
+
+            double exposure = p.exposure_cents() / 100.0;
+            double diff = mkt_value - exposure;
+            total_pl += diff;
+
+            char mkt_buf[16], diff_buf[16], fee_buf[16];
+            snprintf(mkt_buf, sizeof(mkt_buf), "$%.2f", mkt_value);
+            snprintf(diff_buf, sizeof(diff_buf), "%+.2f", diff);
+            snprintf(fee_buf, sizeof(fee_buf), "$%.2f", p.fees_cents() / 100.0);
+
+            // Color whole row: green if >= $1 profit, red if >= $1 loss
+            const char* color = "";
+            const char* reset = "";
+            if (diff >= 1.0) {
+                color = "\033[32m";  // green
+                reset = "\033[0m";
+            } else if (diff <= -1.0) {
+                color = "\033[31m";  // red
+                reset = "\033[0m";
+            }
+
+            std::cout << color
+                      << std::left
+                      << std::setw(36) << ticker_display
+                      << std::right
+                      << std::setw(5) << p.position()
+                      << std::setw(10) << mkt_buf
+                      << std::setw(10) << diff_buf
+                      << std::setw(10) << fee_buf
+                      << reset << "\n";
+        }
+        std::cout << std::string(71, '-') << "\n";
+
+        // Fetch balance (includes Kalshi's portfolio valuation)
+        double cash = 0, kalshi_value = 0;
+        auto balance_result = client.getBalance();
+        if (balance_result.ok()) {
+            cash = balance_result.value().balance / 100.0;
+            kalshi_value = balance_result.value().portfolio_value / 100.0;
+        }
+
+        char bid_buf[16], kalshi_buf[16], cash_buf[16], total_bid_buf[16], total_kalshi_buf[16], pl_buf[16];
+        snprintf(bid_buf, sizeof(bid_buf), "$%.2f", total_mkt_value);
+        snprintf(kalshi_buf, sizeof(kalshi_buf), "$%.2f", kalshi_value);
+        snprintf(cash_buf, sizeof(cash_buf), "$%.2f", cash);
+        snprintf(total_bid_buf, sizeof(total_bid_buf), "$%.2f", total_mkt_value + cash);
+        snprintf(total_kalshi_buf, sizeof(total_kalshi_buf), "$%.2f", kalshi_value + cash);
+        snprintf(pl_buf, sizeof(pl_buf), "%+.2f", total_pl);
+
+        const char* pl_color = "";
+        const char* pl_reset = "";
+        if (total_pl >= 1.0) {
+            pl_color = "\033[32m";
+            pl_reset = "\033[0m";
+        } else if (total_pl <= -1.0) {
+            pl_color = "\033[31m";
+            pl_reset = "\033[0m";
+        }
+
+        std::cout << open_positions.size() << " positions\n\n";
+        std::cout << "  P/L:        " << pl_color << std::setw(10) << pl_buf << pl_reset << "\n";
+        std::cout << "  Bid Value:  " << std::setw(10) << bid_buf << "\n";
+        std::cout << "  Cash:       " << std::setw(10) << cash_buf << "\n";
+        std::cout << "  ─────────────────────\n";
+        std::cout << "  Total:      " << std::setw(10) << total_bid_buf << " - " << total_kalshi_buf << "\n";
+
+        if (watch_interval <= 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(watch_interval));
     }
-    std::cout << std::string(71, '-') << "\n";
-    std::cout << open_positions.size() << " positions\n";
     return 0;
 }
 

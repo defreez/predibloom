@@ -63,6 +63,9 @@ int main(int argc, char** argv) {
         "Learn about the National Blend of Models.");
     auto* portfolio_cmd = app.add_subcommand("portfolio", "Show portfolio (requires auth)");
     auto* portfolio_positions_cmd = portfolio_cmd->add_subcommand("positions", "Show open positions");
+    int positions_watch = 0;
+    portfolio_positions_cmd->add_option("-w,--watch", positions_watch, "Refresh interval in seconds (0 = once)")
+        ->default_val(0);
     auto* portfolio_settlements_cmd = portfolio_cmd->add_subcommand("settlements", "Show settlements");
     int portfolio_settle_days = 7;
     portfolio_settlements_cmd->add_option("-d,--days", portfolio_settle_days, "Days to look back")
@@ -366,7 +369,7 @@ int main(int argc, char** argv) {
 
     // Handle portfolio command
     if (*portfolio_cmd) {
-        if (*portfolio_positions_cmd) return predibloom::cli::runPortfolioPositions(config, client);
+        if (*portfolio_positions_cmd) return predibloom::cli::runPortfolioPositions(config, client, positions_watch);
         if (*portfolio_settlements_cmd) return predibloom::cli::runPortfolioSettlements(config, client, portfolio_settle_days);
         return predibloom::cli::runPortfolioBalance(config, client);
     }

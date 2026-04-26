@@ -158,18 +158,16 @@ Result<std::vector<NbmCycleInfo>> NbmDownloader::listAvailableCycles(int days) {
     std::vector<NbmCycleInfo> cycles;
     constexpr int NBM_CYCLES[] = {1, 7, 13, 19};
 
-    // Get current date in UTC
+    // Get current time and work backwards in UTC
     std::time_t now = std::time(nullptr);
-    std::tm* utc = std::gmtime(&now);
 
     // Check each day
     for (int d = 0; d < days; ++d) {
-        std::tm check_day = *utc;
-        check_day.tm_mday -= d;
-        std::mktime(&check_day);  // Normalize
+        std::time_t day_time = now - d * 24 * 3600;
+        std::tm* day_utc = std::gmtime(&day_time);
 
         char date_buf[11];
-        std::strftime(date_buf, sizeof(date_buf), "%Y-%m-%d", &check_day);
+        std::strftime(date_buf, sizeof(date_buf), "%Y-%m-%d", day_utc);
         std::string date_str(date_buf);
 
         // Check each cycle for this day

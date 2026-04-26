@@ -110,8 +110,34 @@ struct Orderbook {
     std::vector<OrderbookLevel> no;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Orderbook,
-    ticker, yes, no)
+inline void from_json(const nlohmann::json& j, Orderbook& ob) {
+    if (j.contains("ticker")) j.at("ticker").get_to(ob.ticker);
+
+    // API returns orderbook_fp with yes_dollars/no_dollars as arrays of [price, qty]
+    if (j.contains("orderbook_fp")) {
+        const auto& fp = j.at("orderbook_fp");
+        if (fp.contains("yes_dollars")) {
+            for (const auto& level : fp.at("yes_dollars")) {
+                if (level.is_array() && level.size() >= 2) {
+                    OrderbookLevel l;
+                    l.price = level[0].get<std::string>();
+                    l.quantity = level[1].get<std::string>();
+                    ob.yes.push_back(l);
+                }
+            }
+        }
+        if (fp.contains("no_dollars")) {
+            for (const auto& level : fp.at("no_dollars")) {
+                if (level.is_array() && level.size() >= 2) {
+                    OrderbookLevel l;
+                    l.price = level[0].get<std::string>();
+                    l.quantity = level[1].get<std::string>();
+                    ob.no.push_back(l);
+                }
+            }
+        }
+    }
+}
 
 template<typename T>
 struct PaginatedResponse {
@@ -164,9 +190,8 @@ struct OrderbookResponse {
 };
 
 inline void from_json(const nlohmann::json& j, OrderbookResponse& r) {
-    if (j.contains("orderbook")) {
-        j.at("orderbook").get_to(r.orderbook);
-    }
+    // The orderbook endpoint returns orderbook_fp directly at top level
+    r.orderbook = j.get<Orderbook>();
 }
 
 struct Trade {
