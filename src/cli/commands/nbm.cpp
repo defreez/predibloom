@@ -654,14 +654,43 @@ int runNbmAbout() {
     std::cout << "  Public, no authentication required. ~10 days retained.\n\n";
 
     std::cout << YELLOW << "  Cycle Timeline (Pacific Time)" << RESET << "\n";
-    std::cout << DIM << "  ┌────────┬───────────┬─────────────┐\n";
-    std::cout << "  │ " << RESET << "Cycle" << DIM << "  │ " << RESET << "Issued" << DIM << "    │ " << RESET << "Available" << DIM << "   │\n";
-    std::cout << "  ├────────┼───────────┼─────────────┤\n" << RESET;
-    std::cout << DIM << "  │ " << RESET << " 01Z" << DIM << "   │ " << RESET << " 5pm PST" << DIM << "  │ " << RESET << " ~7pm PST" << DIM << "   │\n";
-    std::cout << "  │ " << RESET << " 07Z" << DIM << "   │ " << RESET << "11pm PST" << DIM << "  │ " << RESET << " ~1am PST" << DIM << "   │\n";
-    std::cout << "  │ " << RESET << " 13Z" << DIM << "   │ " << RESET << " 5am PST" << DIM << "  │ " << RESET << " ~7am PST" << DIM << "   │\n";
-    std::cout << "  │ " << RESET << " 19Z" << DIM << "   │ " << RESET << "11am PST" << DIM << "  │ " << RESET << " ~1pm PST" << DIM << "   │\n";
-    std::cout << "  └────────┴───────────┴─────────────┘" << RESET << "\n\n";
+
+    // Use DateTime to get correct PST/PDT times
+    auto now = core::DateTime::now();
+    bool is_dst = core::PacificTime::isDst(now);
+    std::string tz = is_dst ? "PDT" : "PST";
+
+    auto formatCycleTime = [is_dst](int utc_hour) -> std::string {
+        // Create a DateTime for today at this UTC hour
+        auto today = core::DateTime::now();
+        auto dt = core::DateTime::parseDate(today.toDateString());
+        if (!dt) return "?";
+        auto cycle_time = dt->addHours(utc_hour);
+        return core::PacificTime::formatTime(cycle_time, true);
+    };
+
+    std::cout << DIM << "  ┌────────┬────────────┬──────────────┐\n";
+    std::cout << "  │ " << RESET << "Cycle" << DIM << "  │ " << RESET << "Issued" << DIM << "     │ " << RESET << "Available" << DIM << "    │\n";
+    std::cout << "  ├────────┼────────────┼──────────────┤\n" << RESET;
+
+    constexpr int cycles[] = {1, 7, 13, 19};
+    for (int c : cycles) {
+        std::string issued = formatCycleTime(c);
+        std::string avail = "~" + formatCycleTime(c + 2);
+
+        char cycle_str[8];
+        std::snprintf(cycle_str, sizeof(cycle_str), "%02dZ", c);
+
+        std::cout << DIM << "  │ " << RESET
+                  << " " << cycle_str
+                  << DIM << "   │ " << RESET
+                  << std::setw(7) << std::right << issued << " " << tz
+                  << DIM << " │ " << RESET
+                  << std::setw(8) << std::right << avail << " " << tz
+                  << DIM << " │\n" << RESET;
+    }
+
+    std::cout << DIM << "  └────────┴────────────┴──────────────┘" << RESET << "\n\n";
 
     std::cout << YELLOW << "  Learn More" << RESET << "\n";
     std::cout << "  https://vlab.noaa.gov/web/mdl/nbm\n";
