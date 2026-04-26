@@ -61,6 +61,18 @@ find_package(SQLite3 REQUIRED)
 # Find netCDF for NBM grid files
 find_package(netCDF REQUIRED)
 
+# Find ecCodes for GRIB2 parsing (brew install eccodes on macOS)
+find_package(eccodes QUIET)
+if(NOT eccodes_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ECCODES REQUIRED eccodes)
+    set(ECCODES_LIBRARIES ${ECCODES_LINK_LIBRARIES})
+    set(ECCODES_INCLUDE_DIRS ${ECCODES_INCLUDE_DIRS})
+else()
+    set(ECCODES_LIBRARIES eccodes)
+    set(ECCODES_INCLUDE_DIRS "")
+endif()
+
 # Shared core library (API client + service layer)
 add_library(predibloom_core STATIC
     src/api/kalshi_client.cpp
@@ -69,11 +81,15 @@ add_library(predibloom_core STATIC
     src/api/gribstream_client.cpp
     src/api/local_nbm_client.cpp
     src/api/nbm_grid_reader.cpp
+    src/api/nbm_downloader.cpp
+    src/api/nbm_grib_parser.cpp
+    src/api/nbm_service.cpp
     src/api/forecast_db.cpp
     src/api/nws_client.cpp
     src/api/http_cache.cpp
     src/core/service.cpp
     src/core/config.cpp
+    src/core/datetime.cpp
     src/core/weather_comparison.cpp
     src/core/backtest_algo.cpp
     src/core/simple_algo.cpp
@@ -82,6 +98,7 @@ add_library(predibloom_core STATIC
 
 target_include_directories(predibloom_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${ECCODES_INCLUDE_DIRS}
 )
 
 target_link_libraries(predibloom_core PUBLIC
@@ -91,6 +108,7 @@ target_link_libraries(predibloom_core PUBLIC
     OpenSSL::Crypto
     SQLite3::SQLite3
     netCDF::netcdf
+    ${ECCODES_LIBRARIES}
 )
 
 target_compile_definitions(predibloom_core PUBLIC
@@ -116,7 +134,6 @@ add_executable(predibloom-cli
     src/cli/main.cpp
     src/cli/commands/predict.cpp
     src/cli/commands/backtest.cpp
-    src/cli/commands/calibrate.cpp
     src/cli/commands/portfolio.cpp
     src/cli/commands/misc.cpp
     src/cli/commands/nbm.cpp
@@ -160,7 +177,6 @@ target_link_libraries(predibloom_tests PRIVATE
 
 target_compile_definitions(predibloom_tests PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/test_data"
-    NBM_SCRIPT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/scripts/nbm_fetch.py"
 )
 
 include(GoogleTest)

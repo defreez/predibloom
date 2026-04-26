@@ -1,16 +1,13 @@
 #include "nbm.hpp"
 #include "../../api/local_nbm_client.hpp"
-#include "../../core/time_utils.hpp"
+#include "../../api/nbm_service.hpp"
+#include "../../core/datetime.hpp"
 #include "../formatters.hpp"
 
 #include <nlohmann/json.hpp>
 
-#include <unistd.h>
-#include <array>
-#include <cstdio>
-#include <iostream>
 #include <iomanip>
-#include <memory>
+#include <iostream>
 #include <set>
 #include <sstream>
 #include <string>
@@ -20,65 +17,11 @@ namespace predibloom::cli {
 
 namespace {
 
-// Get path to scripts directory relative to current working directory
-std::string getScriptsDir() {
-    const char* paths[] = {
-        "scripts",           // Running from project root
-        "../scripts",        // Running from build/
-    };
-    for (const char* p : paths) {
-        std::string pypath = std::string(p) + "/nbm_fetch.py";
-        if (access(pypath.c_str(), F_OK) == 0) {
-            return p;
-        }
-    }
-    return "scripts";
-}
-
-// Run nbm_fetch.py script with given arguments and parse JSON output.
-int runScriptJson(const std::vector<std::string>& args, nlohmann::json& parsed) {
-    std::ostringstream cmd;
-    cmd << "cd " << getScriptsDir() << " && uv run python nbm_fetch.py";
-    for (const auto& a : args) {
-        cmd << " " << a;
-    }
-    cmd << " --format json 2>/dev/null";
-
-    FILE* pipe = popen(cmd.str().c_str(), "r");
-    if (!pipe) {
-        std::cerr << "error: failed to execute nbm_fetch.py\n";
-        return 1;
-    }
-
-    std::string out;
-    std::array<char, 4096> buffer;
-    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-        out += buffer.data();
-    }
-    int status = pclose(pipe);
-
-    if (out.empty()) {
-        std::cerr << "error: nbm_fetch.py returned no output (exit " << status << ")\n";
-        return 1;
-    }
-    try {
-        parsed = nlohmann::json::parse(out);
-    } catch (const nlohmann::json::parse_error& e) {
-        std::cerr << "error: failed to parse nbm_fetch.py output: " << e.what() << "\n";
-        std::cerr << "output: " << out << "\n";
-        return 1;
-    }
-    if (parsed.is_object() && parsed.contains("error")) {
-        std::cerr << "error: " << parsed["error"].get<std::string>() << "\n";
-        return 1;
-    }
-    return 0;
-}
-
-void printListTable(const nlohmann::json& rows) {
+void printListTable(const std::vector<api::DailyForecast>& rows) {
     std::cout << std::left
-              << std::setw(12) << "Date"
-              << std::setw(7)  << "Cycle"
+              << std::setw(12) << "Target"
+              << std::setw(6)  << "UTC"
+              << std::setw(18) << "Cycle (PT)"
               << std::right
               << std::setw(10) << "Lat"
               << std::setw(11) << "Lon"
@@ -86,23 +29,32 @@ void printListTable(const nlohmann::json& rows) {
               << std::setw(8)  << "Min"
               << std::setw(7)  << "Hrs"
               << "\n";
-    std::cout << std::string(63, '-') << "\n";
+    std::cout << std::string(82, '-') << "\n";
+
     for (const auto& r : rows) {
+        // Compute actual PT date+time from cycle_date + cycle_hour
+        std::string pt_str = "?";
+        auto dt = core::DateTime::parseDate(r.cycle_date);
+        if (dt) {
+            core::DateTime cycle_time = dt->addHours(r.cycle_hour);
+            pt_str = core::PacificTime::format(cycle_time, true);
+        }
+
         std::cout << std::left
-                  << std::setw(12) << r.value("date", std::string{"?"})
-                  << std::setw(7)  << (std::to_string(r.value("cycle", 0)) + "Z");
+                  << std::setw(12) << r.target_date
+                  << std::setw(6)  << (std::to_string(r.cycle_hour) + "Z")
+                  << std::setw(18) << pt_str;
         std::cout << std::right << std::fixed << std::setprecision(3)
-                  << std::setw(10) << r.value("lat", 0.0)
-                  << std::setw(11) << r.value("lon", 0.0);
+                  << std::setw(10) << r.latitude
+                  << std::setw(11) << r.longitude;
         std::cout << std::setprecision(1)
-                  << std::setw(8) << r.value("temp_max_f", 0.0)
-                  << std::setw(8) << r.value("temp_min_f", 0.0);
-        int hrs = r.value("hours_fetched", 0);
-        std::cout << std::setw(7) << hrs << "\n";
+                  << std::setw(8) << r.temp_max_f
+                  << std::setw(8) << r.temp_min_f
+                  << std::setw(7) << r.hours_fetched << "\n";
     }
 }
 
-void printRemoteTable(const nlohmann::json& rows,
+void printRemoteTable(const std::vector<api::NbmCycleInfo>& rows,
                       const std::set<std::pair<std::string, int>>& cached) {
     std::cout << std::left
               << std::setw(12) << "Date"
@@ -110,32 +62,54 @@ void printRemoteTable(const nlohmann::json& rows,
               << std::setw(10) << "Status"
               << "S3 prefix\n";
     std::cout << std::string(80, '-') << "\n";
+
     for (const auto& r : rows) {
-        const std::string date  = r.value("date", std::string{"?"});
-        const int cycle         = r.value("cycle", 0);
-        const std::string s3    = r.value("s3_prefix", std::string{""});
-        const bool hit = cached.count({date, cycle}) > 0;
+        bool hit = cached.count({r.date, r.cycle_hour}) > 0;
         std::cout << std::left
-                  << std::setw(12) << date
-                  << std::setw(7)  << (std::to_string(cycle) + "Z")
+                  << std::setw(12) << r.date
+                  << std::setw(7)  << (std::to_string(r.cycle_hour) + "Z")
                   << std::setw(10) << (hit ? "cached" : "missing")
-                  << s3 << "\n";
+                  << r.s3_prefix << "\n";
     }
 }
 
-void printInventoryTable(const nlohmann::json& rows) {
+void printInventoryTable(const std::vector<api::GribVariable>& rows) {
     std::cout << std::left
               << std::setw(14) << "shortName"
               << std::setw(22) << "typeOfLevel"
               << std::right << std::setw(7) << "level"
               << "  " << std::left << "name\n";
     std::cout << std::string(80, '-') << "\n";
+
     for (const auto& r : rows) {
         std::cout << std::left
-                  << std::setw(14) << r.value("shortName", std::string{"?"})
-                  << std::setw(22) << r.value("typeOfLevel", std::string{"?"})
-                  << std::right << std::setw(7) << r.value("level", 0)
-                  << "  " << std::left << r.value("name", std::string{""}) << "\n";
+                  << std::setw(14) << r.short_name
+                  << std::setw(22) << r.type_of_level
+                  << std::right << std::setw(7) << r.level
+                  << "  " << std::left << r.name << "\n";
+    }
+}
+
+void printGridsTable(const std::vector<api::GridCycleInfo>& rows) {
+    std::cout << std::left
+              << std::setw(12) << "Date"
+              << std::setw(7)  << "Cycle"
+              << std::right
+              << std::setw(8)  << "Files"
+              << std::setw(10) << "FHR Min"
+              << std::setw(10) << "FHR Max"
+              << "\n";
+    std::cout << std::string(47, '-') << "\n";
+
+    for (const auto& r : rows) {
+        std::cout << std::left
+                  << std::setw(12) << r.cycle_date
+                  << std::setw(7)  << (std::to_string(r.cycle_hour) + "Z")
+                  << std::right
+                  << std::setw(8)  << r.file_count
+                  << std::setw(10) << r.fhr_min
+                  << std::setw(10) << r.fhr_max
+                  << "\n";
     }
 }
 
@@ -214,22 +188,28 @@ int runNbmList(const std::string& date,
                const std::string& lat,
                const std::string& lon,
                const std::string& format) {
-    std::vector<std::string> args = {"list-cache"};
-    if (!date.empty()) { args.push_back("--date"); args.push_back(date); }
-    if (!lat.empty())  { args.push_back("--lat");  args.push_back(lat); }
-    if (!lon.empty())  { args.push_back("--lon");  args.push_back(lon); }
+    api::NbmService service;
 
-    nlohmann::json rows;
-    int rc = runScriptJson(args, rows);
-    if (rc != 0) return rc;
+    double lat_val = lat.empty() ? 0.0 : std::stod(lat);
+    double lon_val = lon.empty() ? 0.0 : std::stod(lon);
 
-    if (!rows.is_array()) {
-        std::cerr << "error: expected JSON array from list-cache\n";
-        return 1;
-    }
+    auto rows = service.listForecasts(date, lat_val, lon_val);
 
     if (parseFormat(format) == OutputFormat::Json) {
-        std::cout << rows.dump(2) << "\n";
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& r : rows) {
+            nlohmann::json row;
+            row["date"] = r.target_date;
+            row["cycle"] = r.cycle_hour;
+            row["cycle_date"] = r.cycle_date;
+            row["lat"] = r.latitude;
+            row["lon"] = r.longitude;
+            row["temp_max_f"] = r.temp_max_f;
+            row["temp_min_f"] = r.temp_min_f;
+            row["hours_fetched"] = r.hours_fetched;
+            j.push_back(row);
+        }
+        std::cout << j.dump(2) << "\n";
     } else {
         if (rows.empty()) {
             std::cerr << "(no cached forecasts)\n";
@@ -244,44 +224,46 @@ int runNbmRemote(const std::string& date,
                  int days,
                  const std::string& /*local_cache_dir*/,
                  const std::string& format) {
-    std::vector<std::string> args = {"list-remote"};
-    if (!date.empty()) {
-        args.push_back("--date");
-        args.push_back(date);
-    } else if (days > 0) {
-        args.push_back("--days");
-        args.push_back(std::to_string(days));
-    }
+    api::NbmService service;
 
-    nlohmann::json remote_rows;
-    int rc = runScriptJson(args, remote_rows);
-    if (rc != 0) return rc;
-    if (!remote_rows.is_array()) {
-        std::cerr << "error: expected JSON array from list-remote\n";
+    int lookup_days = days > 0 ? days : 10;
+    auto remote_result = service.listRemoteCycles(lookup_days);
+
+    if (!remote_result.ok()) {
+        std::cerr << "error: " << remote_result.error().message << "\n";
         return 1;
     }
 
-    // Cross-reference with captured grids (not point forecast cache).
-    // A cycle is "cached" only if we have grid files for it.
-    nlohmann::json grid_rows;
+    auto remote_rows = remote_result.value();
+
+    // Filter by date if specified
+    if (!date.empty()) {
+        remote_rows.erase(
+            std::remove_if(remote_rows.begin(), remote_rows.end(),
+                           [&date](const api::NbmCycleInfo& r) { return r.date != date; }),
+            remote_rows.end());
+    }
+
+    // Cross-reference with captured grids
+    auto grid_rows = service.listCapturedGrids();
     std::set<std::pair<std::string, int>> cached;
-    if (runScriptJson({"grids"}, grid_rows) == 0 && grid_rows.is_array()) {
-        for (const auto& r : grid_rows) {
-            // Only consider it cached if we have a reasonable number of forecast hours
-            int file_count = r.value("file_count", 0);
-            if (file_count >= 10) {  // At least 10 forecast hours
-                cached.insert({r.value("cycle_date", std::string{}), r.value("cycle_hour", 0)});
-            }
+    for (const auto& r : grid_rows) {
+        if (r.file_count >= 10) {
+            cached.insert({r.cycle_date, r.cycle_hour});
         }
     }
 
     if (parseFormat(format) == OutputFormat::Json) {
-        for (auto& r : remote_rows) {
-            const std::string d = r.value("date", std::string{});
-            const int c         = r.value("cycle", 0);
-            r["cached"] = cached.count({d, c}) > 0;
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& r : remote_rows) {
+            nlohmann::json row;
+            row["date"] = r.date;
+            row["cycle"] = r.cycle_hour;
+            row["s3_prefix"] = r.s3_prefix;
+            row["cached"] = cached.count({r.date, r.cycle_hour}) > 0;
+            j.push_back(row);
         }
-        std::cout << remote_rows.dump(2) << "\n";
+        std::cout << j.dump(2) << "\n";
     } else {
         if (remote_rows.empty()) {
             std::cerr << "(no matching cycles found on S3)\n";
@@ -297,24 +279,25 @@ int runNbmFetch(double lat,
                 const std::string& date,
                 const std::string& as_of,
                 bool force) {
-    std::vector<std::string> args = {
-        "fetch",
-        "--lat", formatDouble(lat),
-        "--lon", formatDouble(lon),
-        "--date", date,
-    };
-    if (!as_of.empty()) {
-        args.push_back("--as-of");
-        args.push_back(as_of);
-    }
-    if (force) {
-        args.push_back("--no-cache");
+    api::NbmService service;
+
+    // Note: force flag is not implemented (would need to clear cache first)
+    auto result = service.fetchDailyForecast(date, lat, lon, -5, as_of);
+
+    if (!result.ok()) {
+        std::cerr << "error: " << result.error().message << "\n";
+        return 1;
     }
 
-    nlohmann::json result;
-    int rc = runScriptJson(args, result);
-    if (rc != 0) return rc;
-    std::cout << result.dump(2) << "\n";
+    const auto& f = result.value();
+    nlohmann::json j;
+    j["date"] = f.target_date;
+    j["temp_max_f"] = f.temp_max_f;
+    j["temp_min_f"] = f.temp_min_f;
+    j["cycle"] = f.cycle_date + "T" + std::to_string(f.cycle_hour) + "Z";
+    j["hours_fetched"] = f.hours_fetched;
+
+    std::cout << j.dump(2) << "\n";
     return 0;
 }
 
@@ -322,23 +305,28 @@ int runNbmInventory(const std::string& date,
                     int cycle,
                     int forecast_hour,
                     const std::string& format) {
-    std::vector<std::string> args = {
-        "inventory",
-        "--date", date,
-        "--cycle", std::to_string(cycle),
-        "--forecast-hour", std::to_string(forecast_hour),
-    };
+    api::NbmService service;
 
-    nlohmann::json rows;
-    int rc = runScriptJson(args, rows);
-    if (rc != 0) return rc;
-    if (!rows.is_array()) {
-        std::cerr << "error: expected JSON array from inventory\n";
+    auto result = service.inventory(date, cycle, forecast_hour);
+
+    if (!result.ok()) {
+        std::cerr << "error: " << result.error().message << "\n";
         return 1;
     }
 
+    const auto& rows = result.value();
+
     if (parseFormat(format) == OutputFormat::Json) {
-        std::cout << rows.dump(2) << "\n";
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& r : rows) {
+            nlohmann::json row;
+            row["shortName"] = r.short_name;
+            row["typeOfLevel"] = r.type_of_level;
+            row["level"] = r.level;
+            row["name"] = r.name;
+            j.push_back(row);
+        }
+        std::cout << j.dump(2) << "\n";
     } else {
         if (rows.empty()) {
             std::cerr << "(no GRIB messages returned)\n";
@@ -349,123 +337,266 @@ int runNbmInventory(const std::string& date,
     return 0;
 }
 
-namespace {
-
-// Run Python script with streaming output (not JSON).
-int runScriptStreaming(const std::vector<std::string>& args) {
-    std::ostringstream cmd;
-    cmd << "cd " << getScriptsDir() << " && uv run python nbm_fetch.py";
-    for (const auto& a : args) {
-        cmd << " " << a;
-    }
-
-    int rc = std::system(cmd.str().c_str());
-    return WEXITSTATUS(rc);
-}
-
-void printGridsTable(const nlohmann::json& rows) {
-    std::cout << std::left
-              << std::setw(12) << "Date"
-              << std::setw(7)  << "Cycle"
-              << std::right
-              << std::setw(8)  << "Files"
-              << std::setw(10) << "FHR Min"
-              << std::setw(10) << "FHR Max"
-              << "\n";
-    std::cout << std::string(47, '-') << "\n";
-    for (const auto& r : rows) {
-        std::cout << std::left
-                  << std::setw(12) << r.value("cycle_date", std::string{"?"})
-                  << std::setw(7)  << (std::to_string(r.value("cycle_hour", 0)) + "Z")
-                  << std::right
-                  << std::setw(8)  << r.value("file_count", 0)
-                  << std::setw(10) << r.value("fhr_min", 0)
-                  << std::setw(10) << r.value("fhr_max", 0)
-                  << "\n";
-    }
-}
-
-}  // namespace
-
 int runNbmCapture(const std::string& date,
                   int cycle,
-                  const std::string& forecast_hours,
+                  const std::string& forecast_hours_str,
                   const std::string& format) {
-    std::vector<std::string> args = {"capture", "--date", date};
+    api::NbmService service;
+
+    // Parse forecast hours if specified
+    std::vector<int> forecast_hours;
+    if (!forecast_hours_str.empty()) {
+        if (forecast_hours_str.find('-') != std::string::npos) {
+            size_t pos = forecast_hours_str.find('-');
+            int start = std::stoi(forecast_hours_str.substr(0, pos));
+            int end = std::stoi(forecast_hours_str.substr(pos + 1));
+            for (int h = start; h <= end; ++h) {
+                forecast_hours.push_back(h);
+            }
+        } else {
+            std::istringstream iss(forecast_hours_str);
+            std::string token;
+            while (std::getline(iss, token, ',')) {
+                forecast_hours.push_back(std::stoi(token));
+            }
+        }
+    }
+
+    // Determine which cycles to capture
+    std::vector<std::pair<std::string, int>> cycles_to_capture;
+    constexpr int NBM_CYCLES[] = {1, 7, 13, 19};
 
     if (cycle > 0) {
-        args.push_back("--cycle");
-        args.push_back(std::to_string(cycle));
-    }
-
-    if (!forecast_hours.empty()) {
-        args.push_back("--forecast-hours");
-        args.push_back(forecast_hours);
-    }
-
-    // Use streaming for table output (progress indicators)
-    if (parseFormat(format) == OutputFormat::Json) {
-        nlohmann::json result;
-        int rc = runScriptJson(args, result);
-        if (rc != 0) return rc;
-        std::cout << result.dump(2) << "\n";
-        return 0;
+        cycles_to_capture.push_back({date, cycle});
     } else {
-        return runScriptStreaming(args);
+        for (int ch : NBM_CYCLES) {
+            cycles_to_capture.push_back({date, ch});
+        }
     }
+
+    bool is_json = parseFormat(format) == OutputFormat::Json;
+    api::CaptureStats total = {0, 0, 0, ""};
+
+    for (size_t ci = 0; ci < cycles_to_capture.size(); ++ci) {
+        const std::string& cycle_date = cycles_to_capture[ci].first;
+        int cycle_hour = cycles_to_capture[ci].second;
+
+        if (!is_json) {
+            std::cerr << "Capturing " << cycle_date << " " << cycle_hour << "Z...\n";
+        }
+
+        // Set up progress callback for table output
+        if (!is_json) {
+            service.setProgressCallback([cycle_date, cycle_hour](
+                int current, int total_files,
+                const std::string& /*d*/, int /*h*/,
+                int fhr, const std::string& status) {
+                int pct = (current * 100) / total_files;
+                std::cerr << "\r" << cycle_date << " " << cycle_hour << "Z  f"
+                          << std::setw(3) << std::setfill('0') << fhr
+                          << " [" << std::setw(3) << std::setfill(' ') << pct << "%] "
+                          << status << "    " << std::flush;
+            });
+        }
+
+        auto result = service.captureCycle(cycle_date, cycle_hour, forecast_hours);
+
+        if (!is_json) {
+            std::cerr << "\n";
+        }
+
+        if (result.ok()) {
+            total.success += result.value().success;
+            total.failed += result.value().failed;
+            total.skipped += result.value().skipped;
+        } else if (!result.value().error.empty()) {
+            std::cerr << result.value().error << "\n";
+        }
+    }
+
+    if (is_json) {
+        nlohmann::json j;
+        j["success"] = total.success;
+        j["failed"] = total.failed;
+        j["skipped"] = total.skipped;
+        std::cout << j.dump(2) << "\n";
+    } else {
+        std::cout << "Success: " << total.success
+                  << "  Failed: " << total.failed
+                  << "  Skipped: " << total.skipped << "\n";
+    }
+
+    return total.failed > 0 ? 1 : 0;
 }
 
 int runNbmCaptureMissing(int days, const std::string& format) {
-    std::vector<std::string> args = {
-        "capture-missing",
-        "--days", std::to_string(days),
-    };
+    api::NbmService service;
 
-    // Use streaming for table output (progress indicators)
-    if (parseFormat(format) == OutputFormat::Json) {
-        nlohmann::json result;
-        int rc = runScriptJson(args, result);
-        if (rc != 0) return rc;
-        std::cout << result.dump(2) << "\n";
-        return 0;
-    } else {
-        return runScriptStreaming(args);
+    bool is_json = parseFormat(format) == OutputFormat::Json;
+
+    if (!is_json) {
+        std::cerr << "Scanning S3 for last " << days << " days...\n";
     }
+
+    // Get remote cycles for display
+    auto remote_result = service.listRemoteCycles(days);
+    if (!remote_result.ok()) {
+        std::cerr << "error: " << remote_result.error().message << "\n";
+        return 1;
+    }
+
+    auto captured = service.listCapturedGrids();
+    std::set<std::pair<std::string, int>> captured_set;
+    for (const auto& c : captured) {
+        if (c.file_count >= 10) {
+            captured_set.insert({c.cycle_date, c.cycle_hour});
+        }
+    }
+
+    // Count missing
+    std::vector<std::pair<std::string, int>> missing;
+    for (const auto& r : remote_result.value()) {
+        if (captured_set.count({r.date, r.cycle_hour}) == 0) {
+            missing.push_back({r.date, r.cycle_hour});
+        }
+    }
+
+    if (missing.empty()) {
+        if (!is_json) {
+            std::cerr << "All available cycles are captured.\n";
+        }
+        if (is_json) {
+            nlohmann::json j;
+            j["missing"] = 0;
+            j["captured"] = 0;
+            std::cout << j.dump(2) << "\n";
+        }
+        return 0;
+    }
+
+    if (!is_json) {
+        std::cerr << "Found " << missing.size() << " missing cycles\n\n";
+    }
+
+    api::CaptureStats total = {0, 0, 0, ""};
+    int num_cycles = static_cast<int>(missing.size());
+    auto start_time = std::chrono::steady_clock::now();
+
+    for (int idx = 0; idx < num_cycles; ++idx) {
+        const std::string& cycle_date = missing[idx].first;
+        int cycle_hour = missing[idx].second;
+
+        if (!is_json) {
+            // Set up progress callback
+            service.setProgressCallback([idx, num_cycles, cycle_date, cycle_hour, &total](
+                int current, int total_files,
+                const std::string& /*d*/, int /*h*/,
+                int fhr, const std::string& status) {
+                int pct = (current * 100) / total_files;
+                std::cerr << "\r[" << (idx + 1) << "/" << num_cycles << "] "
+                          << cycle_date << " " << cycle_hour << "Z  f"
+                          << std::setw(3) << std::setfill('0') << fhr
+                          << " [" << std::setw(3) << std::setfill(' ') << pct << "%] "
+                          << status << " | +"
+                          << total.success << " skip:" << total.skipped
+                          << " fail:" << total.failed << "   " << std::flush;
+            });
+        }
+
+        auto result = service.captureCycle(cycle_date, cycle_hour, {});
+
+        if (!is_json) {
+            std::cerr << "\n";
+        }
+
+        if (result.ok()) {
+            total.success += result.value().success;
+            total.failed += result.value().failed;
+            total.skipped += result.value().skipped;
+        }
+
+        // Show elapsed and estimated time
+        if (!is_json && idx > 0) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+            double per_cycle = static_cast<double>(elapsed) / (idx + 1);
+            auto remaining = static_cast<int>(per_cycle * (num_cycles - idx - 1));
+
+            int elapsed_min = elapsed / 60;
+            int elapsed_sec = elapsed % 60;
+            int remaining_min = remaining / 60;
+            int remaining_sec = remaining % 60;
+
+            std::cerr << "  elapsed: " << elapsed_min << "m"
+                      << std::setw(2) << std::setfill('0') << elapsed_sec << "s"
+                      << "  remaining: ~" << remaining_min << "m"
+                      << std::setw(2) << std::setfill('0') << remaining_sec << "s\n";
+        }
+    }
+
+    if (is_json) {
+        nlohmann::json j;
+        j["success"] = total.success;
+        j["failed"] = total.failed;
+        j["skipped"] = total.skipped;
+        std::cout << j.dump(2) << "\n";
+    } else {
+        std::cout << "Success: " << total.success
+                  << "  Failed: " << total.failed
+                  << "  Skipped: " << total.skipped << "\n";
+    }
+
+    return total.failed > 0 ? 1 : 0;
 }
 
 int runNbmCleanup(int older_than_days, const std::string& format) {
-    std::vector<std::string> args = {
-        "cleanup",
-        "--older-than", std::to_string(older_than_days),
-    };
+    api::NbmService service;
 
-    nlohmann::json result;
-    int rc = runScriptJson(args, result);
-    if (rc != 0) return rc;
+    bool is_json = parseFormat(format) == OutputFormat::Json;
 
-    if (parseFormat(format) == OutputFormat::Json) {
-        std::cout << result.dump(2) << "\n";
-    } else {
-        int files = result.value("deleted_files", 0);
-        int cycles = result.value("deleted_cycles", 0);
-        std::cout << "Deleted " << files << " files from " << cycles << " cycles\n";
+    if (!is_json) {
+        std::cerr << "Cleaning up files older than " << older_than_days << " days...\n";
     }
+
+    auto result = service.cleanup(older_than_days);
+
+    if (!result.ok()) {
+        std::cerr << "error: " << result.error().message << "\n";
+        return 1;
+    }
+
+    const auto& stats = result.value();
+
+    if (is_json) {
+        nlohmann::json j;
+        j["deleted_files"] = stats.deleted_files;
+        j["deleted_cycles"] = stats.deleted_cycles;
+        std::cout << j.dump(2) << "\n";
+    } else {
+        std::cout << "Deleted " << stats.deleted_files << " files from "
+                  << stats.deleted_cycles << " cycles\n";
+    }
+
     return 0;
 }
 
 int runNbmGrids(const std::string& format) {
-    std::vector<std::string> args = {"grids"};
+    api::NbmService service;
 
-    nlohmann::json rows;
-    int rc = runScriptJson(args, rows);
-    if (rc != 0) return rc;
-    if (!rows.is_array()) {
-        std::cerr << "error: expected JSON array from grids\n";
-        return 1;
-    }
+    auto rows = service.listCapturedGrids();
 
     if (parseFormat(format) == OutputFormat::Json) {
-        std::cout << rows.dump(2) << "\n";
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& r : rows) {
+            nlohmann::json row;
+            row["cycle_date"] = r.cycle_date;
+            row["cycle_hour"] = r.cycle_hour;
+            row["file_count"] = r.file_count;
+            row["fhr_min"] = r.fhr_min;
+            row["fhr_max"] = r.fhr_max;
+            j.push_back(row);
+        }
+        std::cout << j.dump(2) << "\n";
     } else {
         if (rows.empty()) {
             std::cerr << "(no captured grids)\n";
