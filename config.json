@@ -15,8 +15,9 @@
           "latitude": 40.7128,
           "longitude": -74.0060,
           "nws_station": "KNYC",
-          "offset": 0.5,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHLAX",
@@ -24,8 +25,9 @@
           "latitude": 33.9425,
           "longitude": -118.4081,
           "nws_station": "KLAX",
-          "offset": 0.4,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHCHI",
@@ -33,8 +35,9 @@
           "latitude": 41.8781,
           "longitude": -87.6298,
           "nws_station": "KORD",
-          "offset": 2.3,
-          "entry_hour": 2
+          "offset": 0,
+          "entry_hour": 2,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHAUS",
@@ -42,8 +45,9 @@
           "latitude": 30.2672,
           "longitude": -97.7431,
           "nws_station": "KAUS",
-          "offset": 1.1,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTSEA",
@@ -51,8 +55,9 @@
           "latitude": 47.6062,
           "longitude": -122.3321,
           "nws_station": "KSEA",
-          "offset": 1.2,
-          "entry_hour": 13
+          "offset": 0,
+          "entry_hour": 13,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTPHX",
@@ -60,8 +65,9 @@
           "latitude": 33.4484,
           "longitude": -112.0740,
           "nws_station": "KPHX",
-          "offset": 1.2,
-          "entry_hour": 2
+          "offset": 0,
+          "entry_hour": 2,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHDEN",
@@ -69,8 +75,9 @@
           "latitude": 39.7392,
           "longitude": -104.9903,
           "nws_station": "KDEN",
-          "offset": -2.3,
-          "entry_hour": 4
+          "offset": 0,
+          "entry_hour": 4,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTLV",
@@ -78,8 +85,9 @@
           "latitude": 36.1699,
           "longitude": -115.1398,
           "nws_station": "KLAS",
-          "offset": -0.3,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTMIN",
@@ -87,8 +95,9 @@
           "latitude": 44.9778,
           "longitude": -93.2650,
           "nws_station": "KMSP",
-          "offset": 0.0,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTDC",
@@ -96,8 +105,9 @@
           "latitude": 38.9072,
           "longitude": -77.0369,
           "nws_station": "KDCA",
-          "offset": 0.2,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTSFO",
@@ -105,8 +115,9 @@
           "latitude": 37.7749,
           "longitude": -122.4194,
           "nws_station": "KSFO",
-          "offset": -0.4,
-          "entry_hour": 4
+          "offset": 0,
+          "entry_hour": 4,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTDAL",
@@ -114,8 +125,9 @@
           "latitude": 32.7767,
           "longitude": -96.7970,
           "nws_station": "KDFW",
-          "offset": 0.1,
-          "entry_hour": 1
+          "offset": 0,
+          "entry_hour": 1,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHMIA",
@@ -123,8 +135,9 @@
           "latitude": 25.7617,
           "longitude": -80.1918,
           "nws_station": "KMIA",
-          "offset": 2.4,
-          "entry_hour": 12
+          "offset": 0,
+          "entry_hour": 12,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTSATX",
@@ -132,8 +145,9 @@
           "latitude": 29.4241,
           "longitude": -98.4936,
           "nws_station": "KSAT",
-          "offset": -0.8,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTBOS",
@@ -141,8 +155,9 @@
           "latitude": 42.3601,
           "longitude": -71.0589,
           "nws_station": "KBOS",
-          "offset": 0.2,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTATL",
@@ -150,8 +165,9 @@
           "latitude": 33.7490,
           "longitude": -84.3880,
           "nws_station": "KATL",
-          "offset": 1.5,
-          "entry_hour": 2
+          "offset": 0,
+          "entry_hour": 2,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHPHIL",
@@ -159,8 +175,9 @@
           "latitude": 39.9526,
           "longitude": -75.1652,
           "nws_station": "KPHL",
-          "offset": 1.6,
-          "entry_hour": 6
+          "offset": 0,
+          "entry_hour": 6,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTOKC",
@@ -168,8 +185,9 @@
           "latitude": 35.4676,
           "longitude": -97.5164,
           "nws_station": "KOKC",
-          "offset": -0.6,
-          "entry_hour": 1
+          "offset": 0,
+          "entry_hour": 1,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXHIGHTHOU",
@@ -177,8 +195,9 @@
           "latitude": 29.7604,
           "longitude": -95.3698,
           "nws_station": "KIAH",
-          "offset": 3.4,
-          "entry_hour": 18
+          "offset": 0,
+          "entry_hour": 18,
+          "weather_source": "local_nbm"
         }
       ]
     },
@@ -191,8 +210,9 @@
           "latitude": 40.7128,
           "longitude": -74.0060,
           "nws_station": "KNYC",
-          "offset": 1.5,
-          "entry_hour": 3
+          "offset": 0,
+          "entry_hour": 3,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTLAX",
@@ -200,8 +220,9 @@
           "latitude": 33.9425,
           "longitude": -118.4081,
           "nws_station": "KLAX",
-          "offset": 1.1,
-          "entry_hour": 6
+          "offset": 0,
+          "entry_hour": 6,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTCHI",
@@ -209,8 +230,9 @@
           "latitude": 41.8781,
           "longitude": -87.6298,
           "nws_station": "KORD",
-          "offset": -0.2,
-          "entry_hour": 7
+          "offset": 0,
+          "entry_hour": 7,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTAUS",
@@ -218,8 +240,9 @@
           "latitude": 30.2672,
           "longitude": -97.7431,
           "nws_station": "KAUS",
-          "offset": -4.5,
-          "entry_hour": 22
+          "offset": 0,
+          "entry_hour": 22,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTSEA",
@@ -227,8 +250,9 @@
           "latitude": 47.6062,
           "longitude": -122.3321,
           "nws_station": "KSEA",
-          "offset": 0.2,
-          "entry_hour": 16
+          "offset": 0,
+          "entry_hour": 16,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTPHX",
@@ -236,8 +260,9 @@
           "latitude": 33.4484,
           "longitude": -112.0740,
           "nws_station": "KPHX",
-          "offset": 0.4,
-          "entry_hour": 15
+          "offset": 0,
+          "entry_hour": 15,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTDEN",
@@ -245,8 +270,9 @@
           "latitude": 39.7392,
           "longitude": -104.9903,
           "nws_station": "KDEN",
-          "offset": -4.6,
-          "entry_hour": 6
+          "offset": 0,
+          "entry_hour": 6,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTLV",
@@ -254,8 +280,9 @@
           "latitude": 36.1699,
           "longitude": -115.1398,
           "nws_station": "KLAS",
-          "offset": 2.0,
-          "entry_hour": 13
+          "offset": 0,
+          "entry_hour": 13,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTMIN",
@@ -263,8 +290,9 @@
           "latitude": 44.9778,
           "longitude": -93.2650,
           "nws_station": "KMSP",
-          "offset": -0.4,
-          "entry_hour": 1
+          "offset": 0,
+          "entry_hour": 1,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTDC",
@@ -272,8 +300,9 @@
           "latitude": 38.9072,
           "longitude": -77.0369,
           "nws_station": "KDCA",
-          "offset": 0.7,
-          "entry_hour": 1
+          "offset": 0,
+          "entry_hour": 1,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTSFO",
@@ -281,8 +310,9 @@
           "latitude": 37.7749,
           "longitude": -122.4194,
           "nws_station": "KSFO",
-          "offset": 1.0,
-          "entry_hour": 9
+          "offset": 0,
+          "entry_hour": 9,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTDAL",
@@ -290,8 +320,9 @@
           "latitude": 32.7767,
           "longitude": -96.7970,
           "nws_station": "KDFW",
-          "offset": -1.8,
-          "entry_hour": 18
+          "offset": 0,
+          "entry_hour": 18,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTMIA",
@@ -299,8 +330,9 @@
           "latitude": 25.7617,
           "longitude": -80.1918,
           "nws_station": "KMIA",
-          "offset": 1.0,
-          "entry_hour": 0
+          "offset": 0,
+          "entry_hour": 0,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTSATX",
@@ -308,8 +340,9 @@
           "latitude": 29.4241,
           "longitude": -98.4936,
           "nws_station": "KSAT",
-          "offset": -1.6,
-          "entry_hour": 17
+          "offset": 0,
+          "entry_hour": 17,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTBOS",
@@ -317,8 +350,9 @@
           "latitude": 42.3601,
           "longitude": -71.0589,
           "nws_station": "KBOS",
-          "offset": 2.3,
-          "entry_hour": 8
+          "offset": 0,
+          "entry_hour": 8,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTATL",
@@ -326,8 +360,9 @@
           "latitude": 33.7490,
           "longitude": -84.3880,
           "nws_station": "KATL",
-          "offset": 1.0,
-          "entry_hour": 9
+          "offset": 0,
+          "entry_hour": 9,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTPHIL",
@@ -335,8 +370,9 @@
           "latitude": 39.9526,
           "longitude": -75.1652,
           "nws_station": "KPHL",
-          "offset": 1.0,
-          "entry_hour": 5
+          "offset": 0,
+          "entry_hour": 5,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTOKC",
@@ -344,8 +380,9 @@
           "latitude": 35.4676,
           "longitude": -97.5164,
           "nws_station": "KOKC",
-          "offset": -3.3,
-          "entry_hour": 8
+          "offset": 0,
+          "entry_hour": 8,
+          "weather_source": "local_nbm"
         },
         {
           "series_ticker": "KXLOWTHOU",
@@ -353,8 +390,9 @@
           "latitude": 29.7604,
           "longitude": -95.3698,
           "nws_station": "KIAH",
-          "offset": -1.6,
-          "entry_hour": 7
+          "offset": 0,
+          "entry_hour": 7,
+          "weather_source": "local_nbm"
         }
       ]
     }
