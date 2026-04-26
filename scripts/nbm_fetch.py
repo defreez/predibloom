@@ -271,6 +271,25 @@ def s3_grib_path(cycle_date: str, cycle_hour: int, forecast_hour: int) -> str:
     )
 
 
+def check_cycle_available(cycle_date: str, cycle_hour: int) -> tuple[bool, str]:
+    """Check if a cycle's files are available on S3.
+
+    Returns (available, message) tuple.
+    """
+    s3fs_mod = _require_s3fs()
+    fs = s3fs_mod.S3FileSystem(anon=True)
+
+    # Check if f001 exists - if not, cycle isn't ready
+    test_path = s3_grib_path(cycle_date, cycle_hour, 1).replace("s3://", "")
+    try:
+        if fs.exists(test_path):
+            return True, "available"
+        else:
+            return False, f"Cycle {cycle_date} {cycle_hour:02d}Z not yet available on S3 (still uploading?)"
+    except Exception as e:
+        return False, f"S3 check failed: {e}"
+
+
 def fetch_nbm_temps(cycle_date: str, cycle_hour: int, forecast_hour: int,
                     lat: float, lon: float) -> Optional[float]:
     """Fetch 2m temperature (Kelvin) from a single NBM GRIB2 file, or None on failure."""
@@ -709,10 +728,17 @@ def _download_and_extract_temp(cycle_date: str, cycle_hour: int,
             conn.commit()
             conn.close()
 
+            # Keep the GRIB2 file for future use
+            grib_path = nc_path.parent / f"core.f{forecast_hour:03d}.grib2"
+            if not grib_path.exists():
+                import shutil
+                shutil.move(tmp_path, grib_path)
+                tmp_path = None  # Mark as moved
+
             return nc_path
 
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     except Exception as e:
@@ -722,17 +748,28 @@ def _download_and_extract_temp(cycle_date: str, cycle_hour: int,
 
 def capture_cycle(cycle_date: str, cycle_hour: int, base_dir: Path,
                   index_db: Path, forecast_hours: Optional[list[int]] = None,
-                  verbose: bool = True) -> dict:
+                  verbose: bool = True, cycle_progress: str = "") -> dict:
     """Capture a full NBM cycle, extracting 2m temp to NetCDF4.
 
-    Returns dict with counts: {"success": N, "failed": N, "skipped": N}
+    Returns dict with counts: {"success": N, "failed": N, "skipped": N, "error": str|None}
+
+    Args:
+        cycle_progress: Optional string like "[3/40]" for overall progress display
     """
     if forecast_hours is None:
         # Default to hours 1-36 (all hours with 2m temperature)
         forecast_hours = list(range(1, 37))
 
+    # Pre-check: is the cycle available on S3?
+    available, msg = check_cycle_available(cycle_date, cycle_hour)
+    if not available:
+        if verbose:
+            print(f"\n{msg}", file=sys.stderr)
+        return {"success": 0, "failed": 0, "skipped": 0, "error": msg}
+
     result = {"success": 0, "failed": 0, "skipped": 0}
     total = len(forecast_hours)
+    prefix = f"{cycle_progress} " if cycle_progress else ""
 
     for i, fhr in enumerate(forecast_hours, 1):
         nc_path = _grid_file_path(base_dir, cycle_date, cycle_hour, fhr)
@@ -756,8 +793,8 @@ def capture_cycle(cycle_date: str, cycle_hour: int, base_dir: Path,
         if verbose:
             pct = (i * 100) // total
             # Progress bar with percentage
-            print(f"\r  f{fhr:03d} [{pct:3d}%] {status:4s} | "
-                  f"+{result['success']} skip:{result['skipped']} fail:{result['failed']}",
+            print(f"\r{prefix}{cycle_date} {cycle_hour:02d}Z  f{fhr:03d} [{pct:3d}%] {status:4s} | "
+                  f"+{result['success']} skip:{result['skipped']} fail:{result['failed']}   ",
                   end="", file=sys.stderr, flush=True)
 
     if verbose:
@@ -1003,16 +1040,28 @@ def cmd_capture_missing(args: argparse.Namespace) -> int:
         _output({"missing": 0, "captured": 0}, args.format)
         return 0
 
-    print(f"Found {len(missing)} missing cycles", file=sys.stderr)
+    print(f"Found {len(missing)} missing cycles\n", file=sys.stderr)
 
+    import time
     total = {"success": 0, "failed": 0, "skipped": 0}
+    num_cycles = len(missing)
+    start_time = time.time()
 
-    for cycle_date, cycle_hour in missing:
-        print(f"\nCapturing {cycle_date} {cycle_hour:02d}Z...", file=sys.stderr)
+    for idx, (cycle_date, cycle_hour) in enumerate(missing, 1):
+        cycle_progress = f"[{idx}/{num_cycles}]"
         result = capture_cycle(cycle_date, cycle_hour, base_dir, index_db,
-                               verbose=True)
+                               verbose=True, cycle_progress=cycle_progress)
         for k in total:
             total[k] += result[k]
+
+        # Show elapsed and estimated time
+        elapsed = time.time() - start_time
+        if idx > 0:
+            per_cycle = elapsed / idx
+            remaining = per_cycle * (num_cycles - idx)
+            elapsed_str = f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
+            remaining_str = f"{int(remaining // 60)}m{int(remaining % 60):02d}s"
+            print(f"  elapsed: {elapsed_str}  remaining: ~{remaining_str}", file=sys.stderr)
 
     _output(total, args.format,
             ["success", "failed", "skipped"],

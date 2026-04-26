@@ -20,24 +20,25 @@ namespace predibloom::cli {
 
 namespace {
 
-// Get path to nbm_fetch.py script relative to current working directory
-std::string getScriptPath() {
+// Get path to scripts directory relative to current working directory
+std::string getScriptsDir() {
     const char* paths[] = {
-        "scripts/nbm_fetch.py",           // Running from project root
-        "../scripts/nbm_fetch.py",        // Running from build/
+        "scripts",           // Running from project root
+        "../scripts",        // Running from build/
     };
     for (const char* p : paths) {
-        if (access(p, F_OK) == 0) {
+        std::string pypath = std::string(p) + "/nbm_fetch.py";
+        if (access(pypath.c_str(), F_OK) == 0) {
             return p;
         }
     }
-    return "scripts/nbm_fetch.py";
+    return "scripts";
 }
 
 // Run nbm_fetch.py script with given arguments and parse JSON output.
 int runScriptJson(const std::vector<std::string>& args, nlohmann::json& parsed) {
     std::ostringstream cmd;
-    cmd << "uv run python " << getScriptPath();
+    cmd << "cd " << getScriptsDir() << " && uv run python nbm_fetch.py";
     for (const auto& a : args) {
         cmd << " " << a;
     }
@@ -259,14 +260,17 @@ int runNbmRemote(const std::string& date,
         return 1;
     }
 
-    // Cross-reference with the local cache by running list-cache and reducing
-    // to a set of (date, cycle) pairs. This keeps Python as the single source
-    // of truth for the cache-path scheme.
-    nlohmann::json cache_rows;
+    // Cross-reference with captured grids (not point forecast cache).
+    // A cycle is "cached" only if we have grid files for it.
+    nlohmann::json grid_rows;
     std::set<std::pair<std::string, int>> cached;
-    if (runScriptJson({"list-cache"}, cache_rows) == 0 && cache_rows.is_array()) {
-        for (const auto& r : cache_rows) {
-            cached.insert({r.value("date", std::string{}), r.value("cycle", 0)});
+    if (runScriptJson({"grids"}, grid_rows) == 0 && grid_rows.is_array()) {
+        for (const auto& r : grid_rows) {
+            // Only consider it cached if we have a reasonable number of forecast hours
+            int file_count = r.value("file_count", 0);
+            if (file_count >= 10) {  // At least 10 forecast hours
+                cached.insert({r.value("cycle_date", std::string{}), r.value("cycle_hour", 0)});
+            }
         }
     }
 
@@ -349,7 +353,7 @@ namespace {
 // Run Python script with streaming output (not JSON).
 int runScriptStreaming(const std::vector<std::string>& args) {
     std::ostringstream cmd;
-    cmd << "uv run python " << getScriptPath();
+    cmd << "cd " << getScriptsDir() << " && uv run python nbm_fetch.py";
     for (const auto& a : args) {
         cmd << " " << a;
     }
