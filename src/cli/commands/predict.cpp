@@ -100,9 +100,10 @@ int runPredict(const PredictOptions& opts,
         auto weather_client = api::WeatherClient::create(
             series_config->weather_source, config.gribstream_api_token);
 
-        // Get forecast (best/latest run — no asOf for current-day predict)
+        // Get forecast using current time to find the most recent available cycle
+        std::string current_time = core::currentUtcDatetimeHour() + ":00:00Z";
         auto forecast_result = weather_client->getForecast(
-            series_config->latitude, series_config->longitude, opts.date);
+            series_config->latitude, series_config->longitude, opts.date, current_time);
 
         if (!forecast_result.ok()) {
             continue;
