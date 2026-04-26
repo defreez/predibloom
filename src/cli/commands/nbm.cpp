@@ -641,7 +641,7 @@ int runNbmAbout() {
     std::cout << "  " << GREEN << "✓" << RESET << " More accurate than any single model\n";
     std::cout << "  " << GREEN << "✓" << RESET << " Bias-corrected using historical observations\n";
     std::cout << "  " << GREEN << "✓" << RESET << " Free, public domain data on AWS S3\n";
-    std::cout << "  " << GREEN << "✓" << RESET << " Updated 4x daily: 01Z, 07Z, 13Z, 19Z\n\n";
+    std::cout << "  " << GREEN << "✓" << RESET << " Updated 4x daily at 01Z, 07Z, 13Z, 19Z (5pm, 11pm, 5am, 11am PT)\n\n";
 
     std::cout << YELLOW << "  Coverage" << RESET << "\n";
     std::cout << "  " << BLUE << "CONUS:" << RESET << "  2.5km grid, hourly out to 36h, 3-hourly to 264h\n";
