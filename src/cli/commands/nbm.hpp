@@ -10,14 +10,14 @@ int runNbmDownload(const core::Config& config,
                    const std::string& start_date,
                    const std::string& end_date);
 
-// List forecasts already present in the local NBM cache.
+// List forecasts already stored in the local NBM database.
 int runNbmList(const std::string& date,
                const std::string& lat,
                const std::string& lon,
                const std::string& format);
 
-// List (date, cycle) pairs available on NOAA S3. Cross-references the local
-// cache to flag each row as cached or missing when local_cache_dir is non-empty.
+// List (date, cycle) pairs available on NOAA S3. Cross-references local
+// storage to flag each row as present or missing when local_cache_dir is non-empty.
 int runNbmRemote(const std::string& date,
                  int days,
                  const std::string& local_cache_dir,
@@ -52,5 +52,8 @@ int runNbmCleanup(int older_than_days,
 
 // List captured grid cycles.
 int runNbmGrids(const std::string& format);
+
+// Print info about NBM.
+int runNbmAbout();
 
 }  // namespace predibloom::cli

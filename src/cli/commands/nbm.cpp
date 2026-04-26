@@ -607,4 +607,67 @@ int runNbmGrids(const std::string& format) {
     return 0;
 }
 
+int runNbmAbout() {
+    // ANSI color codes
+    const char* RESET   = "\033[0m";
+    const char* BOLD    = "\033[1m";
+    const char* DIM     = "\033[2m";
+    const char* CYAN    = "\033[36m";
+    const char* YELLOW  = "\033[33m";
+    const char* GREEN   = "\033[32m";
+    const char* BLUE    = "\033[34m";
+    const char* MAGENTA = "\033[35m";
+    const char* WHITE   = "\033[37m";
+
+    std::cout << "\n";
+    std::cout << BOLD << CYAN;
+    std::cout << "  ███╗   ██╗██████╗ ███╗   ███╗\n";
+    std::cout << "  ████╗  ██║██╔══██╗████╗ ████║\n";
+    std::cout << "  ██╔██╗ ██║██████╔╝██╔████╔██║\n";
+    std::cout << "  ██║╚██╗██║██╔══██╗██║╚██╔╝██║\n";
+    std::cout << "  ██║ ╚████║██████╔╝██║ ╚═╝ ██║\n";
+    std::cout << "  ╚═╝  ╚═══╝╚═════╝ ╚═╝     ╚═╝\n";
+    std::cout << RESET << "\n";
+
+    std::cout << BOLD << WHITE << "  National Blend of Models" << RESET << "\n";
+    std::cout << DIM << "  NOAA/NWS Weather Prediction Center" << RESET << "\n\n";
+
+    std::cout << YELLOW << "  What is it?" << RESET << "\n";
+    std::cout << "  The NBM blends output from multiple numerical weather models\n";
+    std::cout << "  (GFS, NAM, HRRR, ECMWF, etc.) into a single statistically\n";
+    std::cout << "  post-processed forecast. It's what powers weather.gov forecasts.\n\n";
+
+    std::cout << YELLOW << "  Why use it?" << RESET << "\n";
+    std::cout << "  " << GREEN << "✓" << RESET << " More accurate than any single model\n";
+    std::cout << "  " << GREEN << "✓" << RESET << " Bias-corrected using historical observations\n";
+    std::cout << "  " << GREEN << "✓" << RESET << " Free, public domain data on AWS S3\n";
+    std::cout << "  " << GREEN << "✓" << RESET << " Updated 4x daily: 01Z, 07Z, 13Z, 19Z\n\n";
+
+    std::cout << YELLOW << "  Coverage" << RESET << "\n";
+    std::cout << "  " << BLUE << "CONUS:" << RESET << "  2.5km grid, hourly out to 36h, 3-hourly to 264h\n";
+    std::cout << "  " << BLUE << "Alaska:" << RESET << " 3km grid\n";
+    std::cout << "  " << BLUE << "Hawaii:" << RESET << " 2.5km grid\n";
+    std::cout << "  " << BLUE << "Puerto Rico:" << RESET << " 1.25km grid\n\n";
+
+    std::cout << YELLOW << "  S3 Bucket" << RESET << "\n";
+    std::cout << "  " << MAGENTA << "s3://noaa-nbm-grib2-pds" << RESET << "\n";
+    std::cout << "  Public, no authentication required. ~10 days retained.\n\n";
+
+    std::cout << YELLOW << "  Cycle Timeline (Pacific Time)" << RESET << "\n";
+    std::cout << DIM << "  ┌────────┬───────────┬─────────────┐\n";
+    std::cout << "  │ " << RESET << "Cycle" << DIM << "  │ " << RESET << "Issued" << DIM << "    │ " << RESET << "Available" << DIM << "   │\n";
+    std::cout << "  ├────────┼───────────┼─────────────┤\n" << RESET;
+    std::cout << DIM << "  │ " << RESET << " 01Z" << DIM << "   │ " << RESET << " 5pm PST" << DIM << "  │ " << RESET << " ~7pm PST" << DIM << "   │\n";
+    std::cout << "  │ " << RESET << " 07Z" << DIM << "   │ " << RESET << "11pm PST" << DIM << "  │ " << RESET << " ~1am PST" << DIM << "   │\n";
+    std::cout << "  │ " << RESET << " 13Z" << DIM << "   │ " << RESET << " 5am PST" << DIM << "  │ " << RESET << " ~7am PST" << DIM << "   │\n";
+    std::cout << "  │ " << RESET << " 19Z" << DIM << "   │ " << RESET << "11am PST" << DIM << "  │ " << RESET << " ~1pm PST" << DIM << "   │\n";
+    std::cout << "  └────────┴───────────┴─────────────┘" << RESET << "\n\n";
+
+    std::cout << YELLOW << "  Learn More" << RESET << "\n";
+    std::cout << "  https://vlab.noaa.gov/web/mdl/nbm\n";
+    std::cout << "  https://registry.opendata.aws/noaa-nbm\n\n";
+
+    return 0;
+}
+
 }  // namespace predibloom::cli

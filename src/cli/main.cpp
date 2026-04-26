@@ -59,6 +59,8 @@ int main(int argc, char** argv) {
     auto* nbm_grids_cmd     = nbm_cmd->add_subcommand("grids",
         "Show captured NetCDF4 grid cycles from ~/.cache/predibloom/nbm/. "
         "Lists cycle date, hour, file count, and forecast hour range.");
+    auto* nbm_about_cmd     = nbm_cmd->add_subcommand("about",
+        "Learn about the National Blend of Models.");
     auto* portfolio_cmd = app.add_subcommand("portfolio", "Show portfolio (requires auth)");
     auto* portfolio_positions_cmd = portfolio_cmd->add_subcommand("positions", "Show open positions");
     auto* portfolio_settlements_cmd = portfolio_cmd->add_subcommand("settlements", "Show settlements");
@@ -381,7 +383,8 @@ int main(int argc, char** argv) {
             if (*nbm_capture_missing_cmd) return predibloom::cli::runNbmCaptureMissing(nbm_capture_missing_days, nbm_capture_missing_format);
             if (*nbm_cleanup_cmd) return predibloom::cli::runNbmCleanup(nbm_cleanup_older_than, nbm_cleanup_format);
             if (*nbm_grids_cmd) return predibloom::cli::runNbmGrids(nbm_grids_format);
-            std::cerr << "weather nbm requires a subcommand (download|list|remote|fetch|inventory|capture|capture-missing|cleanup|grids)\n";
+            if (*nbm_about_cmd) return predibloom::cli::runNbmAbout();
+            std::cerr << "weather nbm requires a subcommand (download|list|remote|fetch|inventory|capture|capture-missing|cleanup|grids|about)\n";
             return 1;
         }
         std::cerr << "weather requires a model subcommand (nbm)\n";
