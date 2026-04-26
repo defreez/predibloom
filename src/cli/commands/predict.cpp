@@ -151,7 +151,7 @@ int runPredict(const PredictOptions& opts,
         double adjusted = forecast + effective_offset;
 
         // Get markets (with delay to avoid rate limiting)
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         api::GetMarketsParams params;
         params.series_ticker = series_config->series_ticker;
         auto markets_result = client.getAllMarkets(params);

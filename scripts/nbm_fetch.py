@@ -1023,10 +1023,10 @@ def cmd_capture_missing(args: argparse.Namespace) -> int:
         _output({"error": f"S3 scan failed: {e}"}, args.format)
         return 1
 
-    # Get captured cycles
+    # Get captured cycles (consider captured if we have at least 10 forecast hours)
     captured = list_captured_cycles(index_db)
     captured_set = {(c["cycle_date"], c["cycle_hour"]) for c in captured
-                    if c["file_count"] >= NBM_MAX_FORECAST_HOUR}
+                    if c["file_count"] >= 10}
 
     # Find missing
     missing = []
