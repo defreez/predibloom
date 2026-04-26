@@ -116,10 +116,11 @@ int main(int argc, char** argv) {
     backtest_cmd->add_option("--latency-sweep", backtest_latency_sweep, "Latency algo: test multiple latencies")->delimiter(',');
 
     // Predict command options
-    std::string predict_series, predict_date;
+    std::string predict_series, predict_date, predict_cycle;
     double predict_margin = 2.0, predict_min_price = 5.0, predict_max_price = 40.0;
     predict_cmd->add_option("-s,--series", predict_series, "Series ticker");
     predict_cmd->add_option("-d,--date", predict_date, "Date YYYY-MM-DD")->required();
+    predict_cmd->add_option("--cycle", predict_cycle, "Forecast cycle (YYYY-MM-DDTHH, e.g. 2026-04-25T19)");
     predict_cmd->add_option("--margin", predict_margin, "Min margin (°F)")->default_val(2.0);
     predict_cmd->add_option("--min-price", predict_min_price, "Min price (cents)")->default_val(5.0);
     predict_cmd->add_option("--max-price", predict_max_price, "Max price (cents)")->default_val(40.0);
@@ -311,6 +312,7 @@ int main(int argc, char** argv) {
         predibloom::cli::PredictOptions opts;
         opts.series = predict_series;
         opts.date = predict_date;
+        opts.cycle = predict_cycle;
         opts.margin = predict_margin;
         opts.min_price = predict_min_price;
         opts.max_price = predict_max_price;

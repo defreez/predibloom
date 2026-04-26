@@ -100,10 +100,30 @@ int runPredict(const PredictOptions& opts,
         auto weather_client = api::WeatherClient::create(
             series_config->weather_source, config.gribstream_api_token);
 
-        // Get forecast using current time to find the most recent available cycle
-        std::string current_time = core::currentUtcDatetimeHour() + ":00:00Z";
+        // Determine asOf time: use specified cycle or current time
+        std::string as_of;
+        if (!opts.cycle.empty()) {
+            // User specified a cycle like "2026-04-25T19" meaning the 19Z cycle
+            // NBM cycles become available ~2hr after their nominal time
+            // So to get the 19Z cycle, we pretend it's 21Z (19 + 2hr delay)
+            std::string cycle_str = opts.cycle;
+            if (cycle_str.size() >= 13) {
+                int cycle_hour = std::stoi(cycle_str.substr(11, 2));
+                int avail_hour = cycle_hour + 2;  // Add delay
+                std::string date_part = cycle_str.substr(0, 10);
+                if (avail_hour >= 24) {
+                    avail_hour -= 24;
+                    date_part = core::addDaysToDate(date_part, 1);
+                }
+                char buf[24];
+                snprintf(buf, sizeof(buf), "%sT%02d:00:00Z", date_part.c_str(), avail_hour);
+                as_of = buf;
+            }
+        } else {
+            as_of = core::currentUtcDatetimeHour() + ":00:00Z";
+        }
         auto forecast_result = weather_client->getForecast(
-            series_config->latitude, series_config->longitude, opts.date, current_time);
+            series_config->latitude, series_config->longitude, opts.date, as_of);
 
         if (!forecast_result.ok()) {
             continue;
@@ -194,6 +214,9 @@ int runPredict(const PredictOptions& opts,
 
     // Output results
     std::cout << "=== PREDICTIONS FOR " << opts.date << " ===\n";
+    if (!opts.cycle.empty()) {
+        std::cout << "Using cycle: " << opts.cycle << "\n";
+    }
     if (!most_recent_forecast_time.empty()) {
         std::string formatted = core::formatUtcAsPtWithAge(most_recent_forecast_time);
         if (!formatted.empty()) {
