@@ -120,14 +120,6 @@ void printParameters(const BacktestOptions& opts, const std::vector<std::string>
     } else {
         std::cerr << "  Trade size: $10 per °F margin\n";
     }
-
-    if (opts.jitter > 0) {
-        std::cerr << "  Jitter: +/-" << opts.jitter << "hr";
-        if (opts.seed >= 0) {
-            std::cerr << " (seed=" << opts.seed << ")";
-        }
-        std::cerr << "\n";
-    }
     std::cerr << "\n";
 }
 
@@ -417,8 +409,6 @@ int runBacktest(const BacktestOptions& opts,
         algo_cfg.entry_hour = opts.entry_hour;
         algo_cfg.exit_hour = opts.exit_hour;
         algo_cfg.trade_size = opts.trade_size;
-        algo_cfg.jitter = opts.jitter;
-        algo_cfg.seed = opts.seed;
         algo_cfg.latency_hours = current_latency;
 
         auto algo = core::createAlgo(algo_name, algo_cfg);

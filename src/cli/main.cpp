@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> backtest_series;
     std::string backtest_start, backtest_end, backtest_algo;
     double backtest_margin = 0.0, backtest_min_price = 5.0, backtest_max_price = 40.0, backtest_trade_size = 0.0;
-    int backtest_entry_hour = -1, backtest_exit_hour = -1, backtest_seed = -1, backtest_jitter = 3;
+    int backtest_entry_hour = -1, backtest_exit_hour = -1;
     int backtest_latency = 0;
     std::vector<int> backtest_latency_sweep;
     backtest_cmd->add_option("-s,--series", backtest_series, "Series ticker(s)")->delimiter(',');
@@ -112,8 +112,6 @@ int main(int argc, char** argv) {
     backtest_cmd->add_option("--trade-size", backtest_trade_size, "Dollars per trade")->default_val(0.0);
     backtest_cmd->add_option("--entry-hour", backtest_entry_hour, "Entry hour UTC")->default_val(-1)->check(CLI::Range(-1, 23));
     backtest_cmd->add_option("--exit-hour", backtest_exit_hour, "Exit hour UTC")->default_val(-1)->check(CLI::Range(-1, 23));
-    backtest_cmd->add_option("--seed", backtest_seed, "RNG seed")->default_val(-1);
-    backtest_cmd->add_option("--jitter", backtest_jitter, "Entry jitter +/- hours")->default_val(3)->check(CLI::Range(0, 12));
     backtest_cmd->add_option("--latency", backtest_latency, "Latency algo: hours after cycle")->default_val(0)->check(CLI::Range(0, 24));
     backtest_cmd->add_option("--latency-sweep", backtest_latency_sweep, "Latency algo: test multiple latencies")->delimiter(',');
 
@@ -303,8 +301,6 @@ int main(int argc, char** argv) {
         opts.entry_hour = backtest_entry_hour;
         opts.exit_hour = backtest_exit_hour;
         opts.trade_size = backtest_trade_size;
-        opts.jitter = backtest_jitter;
-        opts.seed = backtest_seed;
         opts.latency_hours = backtest_latency;
         opts.latency_sweep = backtest_latency_sweep;
         return predibloom::cli::runBacktest(opts, config, client);

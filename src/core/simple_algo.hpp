@@ -1,7 +1,6 @@
 #pragma once
 
 #include "backtest_algo.hpp"
-#include <random>
 
 namespace predibloom::core {
 
@@ -17,10 +16,6 @@ public:
     std::string name() const override { return "simple"; }
 
     TradeDecision evaluate(const TradeContext& ctx) override;
-
-private:
-    std::mt19937 rng_;
-    std::uniform_int_distribution<int> jitter_dist_;
 };
 
 }  // namespace predibloom::core

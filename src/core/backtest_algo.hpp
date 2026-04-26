@@ -71,8 +71,6 @@ struct AlgoConfig {
     int entry_hour = -1;                           // UTC hour for entry (-1 = use series default)
     int exit_hour = -1;                            // UTC hour for exit (-1 = hold to settlement)
     double trade_size = 0;                         // Dollars per trade (0 = 10x margin)
-    int jitter = 0;                                // Entry jitter +/- hours
-    int seed = -1;                                 // RNG seed for jitter
 
     // Latency algo specific
     int latency_hours = 0;                         // Hours after cycle availability to enter

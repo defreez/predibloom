@@ -8,8 +8,6 @@ namespace predibloom::core {
 
 SimpleAlgo::SimpleAlgo(const AlgoConfig& cfg)
     : BacktestAlgo(cfg)
-    , rng_(cfg.seed >= 0 ? static_cast<unsigned>(cfg.seed) : std::random_device{}())
-    , jitter_dist_(-cfg.jitter, cfg.jitter)
 {
 }
 
@@ -59,9 +57,8 @@ TradeDecision SimpleAlgo::evaluate(const TradeContext& ctx) {
     int effective_entry_hour = (config_.entry_hour >= 0)
         ? config_.entry_hour
         : ctx.series->effectiveEntryHour();
-    int delta = (config_.jitter > 0) ? jitter_dist_(rng_) : 0;
-    std::string target_hour = computeEntryDatetimeWithJitter(
-        ctx.date, ctx.series->entry_day_offset, effective_entry_hour, delta);
+    std::string target_hour = computeEntryDatetime(
+        ctx.date, ctx.series->entry_day_offset, effective_entry_hour);
 
     // Find entry price from trades
     double entry_price = -1;
