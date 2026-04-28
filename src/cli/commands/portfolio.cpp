@@ -75,25 +75,72 @@ int runPortfolioPositions(const core::Config& config, api::KalshiClient& client,
             return 0;
         }
 
-        // Fetch current prices for all positions via orderbook
-        std::unordered_map<std::string, double> prices;  // ticker -> yes_bid_cents
+        // Fetch current prices for all positions
+        // States: open (has orderbook), pending (closed, no result), settled (has result)
+        struct PriceInfo {
+            double price_cents = 0;
+            double yes_bid_cents = 0;
+            double no_bid_cents = 0;
+            bool has_yes_bid = false;
+            bool has_no_bid = false;
+            std::string status;   // "open", "pending", "settled"
+            std::string result;   // "yes" or "no" if settled
+        };
+        std::unordered_map<std::string, PriceInfo> prices;
+
         for (const auto& p : open_positions) {
+            PriceInfo info;
+            info.status = "open";
+
+            // First try orderbook
             auto ob_result = client.getOrderbook(p.ticker);
-            if (ob_result.ok() && !ob_result.value().yes.empty()) {
-                // yes array is sorted ascending, last element is highest bid
-                prices[p.ticker] = ob_result.value().yes.back().price_cents();
+            if (ob_result.ok() && (!ob_result.value().yes.empty() || !ob_result.value().no.empty())) {
+                const auto& ob = ob_result.value();
+                // yes/no arrays are sorted ascending; back() = highest bid
+                if (!ob.yes.empty()) {
+                    info.yes_bid_cents = ob.yes.back().price_cents();
+                    info.has_yes_bid = true;
+                }
+                if (!ob.no.empty()) {
+                    info.no_bid_cents = ob.no.back().price_cents();
+                    info.has_no_bid = true;
+                }
+                info.price_cents = info.yes_bid_cents;
+                prices[p.ticker] = info;
+                continue;
             }
+
+            // Orderbook empty - check market status
+            auto mkt_result = client.getMarket(p.ticker);
+            if (mkt_result.ok()) {
+                const auto& mkt = mkt_result.value();
+                if (!mkt.result.empty()) {
+                    // Settled - payout is known
+                    info.status = "settled";
+                    info.result = mkt.result;
+                    info.price_cents = (mkt.result == "yes") ? 100.0 : 0.0;
+                } else if (mkt.status == "closed") {
+                    // Closed but awaiting settlement - predict based on last price
+                    info.status = "pending";
+                    double last_price = std::atof(mkt.last_price_dollars.c_str()) * 100.0;
+                    // If last price > 50, assume YES wins (100), else NO wins (0)
+                    info.price_cents = (last_price >= 50.0) ? 100.0 : 0.0;
+                    info.result = (last_price >= 50.0) ? "yes" : "no";
+                }
+            }
+            prices[p.ticker] = info;
         }
 
         std::cout << std::left
                   << std::setw(36) << "Ticker"
                   << std::right
                   << std::setw(5) << "Pos"
+                  << std::setw(8) << "Win%"
                   << std::setw(10) << "Mkt Value"
                   << std::setw(10) << "P/L"
                   << std::setw(10) << "Fees"
                   << "\n";
-        std::cout << std::string(71, '-') << "\n";
+        std::cout << std::string(79, '-') << "\n";
 
         double total_mkt_value = 0;
         double total_pl = 0;
@@ -104,9 +151,15 @@ int runPortfolioPositions(const core::Config& config, api::KalshiClient& client,
             }
 
             double mkt_value = 0;
+            std::string status = "open";
+            std::string result;
+            const PriceInfo* info = nullptr;
             auto it = prices.find(p.ticker);
             if (it != prices.end()) {
-                mkt_value = p.position() * it->second / 100.0;
+                mkt_value = p.position() * it->second.price_cents / 100.0;
+                status = it->second.status;
+                result = it->second.result;
+                info = &it->second;
             }
             total_mkt_value += mkt_value;
 
@@ -114,15 +167,50 @@ int runPortfolioPositions(const core::Config& config, api::KalshiClient& client,
             double diff = mkt_value - exposure;
             total_pl += diff;
 
+            // Kalshi-style win probability: contra-side ask, i.e. 100 - contra-side bid.
+            // YES holder: yes_ask = 100 - best no_bid. NO holder: no_ask = 100 - best yes_bid.
+            char win_buf[16];
+            if (status == "settled" || status == "pending") {
+                bool position_won = (result == "yes" && p.position() > 0) ||
+                                    (result == "no" && p.position() < 0);
+                snprintf(win_buf, sizeof(win_buf), "%s", position_won ? "100%" : "0%");
+            } else if (info && p.position() > 0 && info->has_no_bid) {
+                snprintf(win_buf, sizeof(win_buf), "%.0f%%", 100.0 - info->no_bid_cents);
+            } else if (info && p.position() < 0 && info->has_yes_bid) {
+                snprintf(win_buf, sizeof(win_buf), "%.0f%%", 100.0 - info->yes_bid_cents);
+            } else if (info && p.position() > 0 && info->has_yes_bid) {
+                // Fallback: only same-side bid available
+                snprintf(win_buf, sizeof(win_buf), "%.0f%%", info->yes_bid_cents);
+            } else if (info && p.position() < 0 && info->has_no_bid) {
+                snprintf(win_buf, sizeof(win_buf), "%.0f%%", info->no_bid_cents);
+            } else {
+                snprintf(win_buf, sizeof(win_buf), "-");
+            }
+
             char mkt_buf[16], diff_buf[16], fee_buf[16];
-            snprintf(mkt_buf, sizeof(mkt_buf), "$%.2f", mkt_value);
+            if (status == "settled") {
+                snprintf(mkt_buf, sizeof(mkt_buf), "%s", result == "yes" ? "[WIN]" : "[LOSS]");
+            } else if (status == "pending") {
+                // Show predicted result based on last price
+                snprintf(mkt_buf, sizeof(mkt_buf), "%s", result == "yes" ? "[WIN?]" : "[LOSS?]");
+            } else {
+                snprintf(mkt_buf, sizeof(mkt_buf), "$%.2f", mkt_value);
+            }
             snprintf(diff_buf, sizeof(diff_buf), "%+.2f", diff);
             snprintf(fee_buf, sizeof(fee_buf), "$%.2f", p.fees_cents() / 100.0);
 
-            // Color whole row: green if >= $1 profit, red if >= $1 loss
+            // Color: pending/settled by result, open by P/L
             const char* color = "";
             const char* reset = "";
-            if (diff >= 1.0) {
+            if (status == "settled" || status == "pending") {
+                // Dim + green for win, dim + red for loss
+                if (result == "yes") {
+                    color = "\033[2;32m";  // dim green
+                } else {
+                    color = "\033[2;31m";  // dim red
+                }
+                reset = "\033[0m";
+            } else if (diff >= 1.0) {
                 color = "\033[32m";  // green
                 reset = "\033[0m";
             } else if (diff <= -1.0) {
@@ -135,12 +223,13 @@ int runPortfolioPositions(const core::Config& config, api::KalshiClient& client,
                       << std::setw(36) << ticker_display
                       << std::right
                       << std::setw(5) << p.position()
+                      << std::setw(8) << win_buf
                       << std::setw(10) << mkt_buf
                       << std::setw(10) << diff_buf
                       << std::setw(10) << fee_buf
                       << reset << "\n";
         }
-        std::cout << std::string(71, '-') << "\n";
+        std::cout << std::string(79, '-') << "\n";
 
         // Fetch balance (includes Kalshi's portfolio valuation)
         double cash = 0, kalshi_value = 0;
