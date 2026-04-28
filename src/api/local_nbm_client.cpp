@@ -1,9 +1,9 @@
 #include "local_nbm_client.hpp"
+#include "../core/datetime.hpp"
 
 #include <algorithm>
-#include <chrono>
+#include <cmath>
 #include <cstdlib>
-#include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <vector>
@@ -18,41 +18,6 @@ std::string default_nbm_base_path() {
         return "";
     }
     return std::string(home) + "/.cache/predibloom/nbm";
-}
-
-// Parse YYYY-MM-DD to tm struct.
-std::tm parse_date(const std::string& date) {
-    std::tm tm = {};
-    std::istringstream ss(date);
-    ss >> std::get_time(&tm, "%Y-%m-%d");
-    return tm;
-}
-
-// Parse ISO-8601 timestamp to time_t (UTC).
-std::time_t parse_iso_time(const std::string& iso) {
-    std::tm tm = {};
-    std::string s = iso;
-    // Remove trailing 'Z' if present.
-    if (!s.empty() && s.back() == 'Z') {
-        s.pop_back();
-    }
-
-    // Try various formats.
-    for (const char* fmt : {"%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H"}) {
-        std::istringstream ss(s);
-        ss >> std::get_time(&tm, fmt);
-        if (!ss.fail()) {
-            return timegm(&tm);
-        }
-    }
-    return 0;
-}
-
-// Format tm as YYYY-MM-DD.
-std::string format_date(const std::tm& tm) {
-    std::ostringstream ss;
-    ss << std::put_time(&tm, "%Y-%m-%d");
-    return ss.str();
 }
 
 }  // namespace
@@ -109,78 +74,33 @@ bool LocalNbmClient::is_open() const {
 
 std::pair<std::string, int> LocalNbmClient::findBestCycle(const std::string& target_date,
                                                            const std::string& asOf_iso) {
-    // NBM cycles: 01, 07, 13, 19 UTC.
-    // Default: use previous day's 19Z cycle.
-    std::tm target = parse_date(target_date);
-    std::time_t target_t = timegm(&target);
+    using core::DateTime;
+    using core::NbmCycle;
 
     if (asOf_iso.empty()) {
-        // Use previous day's 19Z cycle.
-        std::time_t prev_day = target_t - 86400;
-        std::tm* prev_tm = gmtime(&prev_day);
-        return {format_date(*prev_tm), 19};
+        // Default: use previous day's 19Z cycle
+        auto cycle = NbmCycle::forTargetDate(target_date);
+        return {cycle.date(), cycle.hour()};
     }
 
-    // Parse as-of time and find most recent available cycle.
-    std::time_t as_of_t = parse_iso_time(asOf_iso);
-    if (as_of_t == 0) {
-        // Parse failed; fall back to default.
-        std::time_t prev_day = target_t - 86400;
-        std::tm* prev_tm = gmtime(&prev_day);
-        return {format_date(*prev_tm), 19};
+    // Parse as-of time and find most recent available cycle
+    auto as_of = DateTime::parseIso(asOf_iso);
+    if (!as_of) {
+        // Parse failed; fall back to default
+        auto cycle = NbmCycle::forTargetDate(target_date);
+        return {cycle.date(), cycle.hour()};
     }
 
-    // Account for ~2 hour delay in cycle availability.
-    std::time_t effective = as_of_t - 2 * 3600;
-    std::tm* eff_tm = gmtime(&effective);
-
-    int hour = eff_tm->tm_hour;
-    int cycle_hour;
-    std::time_t cycle_date_t = effective;
-
-    if (hour < 1) {
-        // Before 01Z: use previous day's 19Z.
-        cycle_date_t = effective - 86400;
-        cycle_hour = 19;
-    } else if (hour < 7) {
-        cycle_hour = 1;
-    } else if (hour < 13) {
-        cycle_hour = 7;
-    } else if (hour < 19) {
-        cycle_hour = 13;
-    } else {
-        cycle_hour = 19;
-    }
-
-    std::tm* cycle_tm = gmtime(&cycle_date_t);
-    return {format_date(*cycle_tm), cycle_hour};
+    auto cycle = NbmCycle::availableAt(*as_of);
+    return {cycle.date(), cycle.hour()};
 }
 
 std::vector<int> LocalNbmClient::computeForecastHours(const std::string& cycle_date,
                                                         int cycle_hour,
                                                         const std::string& target_date,
-                                                        int utc_offset_hours) {
-    // Parse cycle datetime
-    std::tm cycle_tm = parse_date(cycle_date);
-    cycle_tm.tm_hour = cycle_hour;
-    std::time_t cycle_t = timegm(&cycle_tm);
-
-    // Parse target date and compute local midnight in UTC
-    // e.g., utc_offset_hours=-5 (EST) means midnight = 05:00 UTC
-    //       utc_offset_hours=-8 (PST) means midnight = 08:00 UTC
-    std::tm target_tm = parse_date(target_date);
-    target_tm.tm_hour = -utc_offset_hours;  // Convert offset to UTC hour of midnight
-    std::time_t target_start = timegm(&target_tm);
-    std::time_t target_end = target_start + 24 * 3600;
-
-    std::vector<int> hours;
-    for (int h = 1; h <= 264; ++h) {
-        std::time_t valid_time = cycle_t + h * 3600;
-        if (valid_time >= target_start && valid_time < target_end) {
-            hours.push_back(h);
-        }
-    }
-    return hours;
+                                                        const std::string& timezone) {
+    core::NbmCycle cycle(cycle_date, cycle_hour);
+    return cycle.forecastHoursFor(target_date, timezone);
 }
 
 Result<WeatherResponse> LocalNbmClient::fetchFromGrid(double latitude,
@@ -188,12 +108,14 @@ Result<WeatherResponse> LocalNbmClient::fetchFromGrid(double latitude,
                                                        const std::string& target_date,
                                                        const std::string& cycle_date,
                                                        int cycle_hour,
-                                                       int utc_offset_hours) {
+                                                       const std::string& timezone) {
+    using core::DateTime;
+
     if (!grid_reader_) {
         return Error(ApiError::NetworkError, "Grid reader not available");
     }
 
-    auto hours = computeForecastHours(cycle_date, cycle_hour, target_date, utc_offset_hours);
+    auto hours = computeForecastHours(cycle_date, cycle_hour, target_date, timezone);
     if (hours.empty()) {
         return Error(ApiError::HttpError, "No forecast hours found for date");
     }
@@ -210,21 +132,53 @@ Result<WeatherResponse> LocalNbmClient::fetchFromGrid(double latitude,
         return Error(ApiError::HttpError, "No temperature data in grid files");
     }
 
-    // Convert K to F
+    // Reject cycles that don't substantially cover the target's local day.
+    // A complete local day has ~24 forecast hours; require most of them so we
+    // don't treat a single hour at the day boundary as the "daily" min/max.
+    constexpr size_t kMinCoverageHours = 20;
+    if (temps_k.size() < kMinCoverageHours) {
+        return Error(ApiError::HttpError,
+                     "Insufficient coverage: only " + std::to_string(temps_k.size()) +
+                     " hours of cycle " + cycle_date + " " +
+                     std::to_string(cycle_hour) + "Z fall inside the local day for " +
+                     target_date);
+    }
+
+    // Convert K to F and track max/min indices
     std::vector<double> temps_f;
     temps_f.reserve(temps_k.size());
     for (double k : temps_k) {
         temps_f.push_back((k - 273.15) * 9.0 / 5.0 + 32.0);
     }
 
-    double temp_max = *std::max_element(temps_f.begin(), temps_f.end());
-    double temp_min = *std::min_element(temps_f.begin(), temps_f.end());
+    auto max_it = std::max_element(temps_f.begin(), temps_f.end());
+    auto min_it = std::min_element(temps_f.begin(), temps_f.end());
+    double temp_max = *max_it;
+    double temp_min = *min_it;
+    size_t max_idx = std::distance(temps_f.begin(), max_it);
+    size_t min_idx = std::distance(temps_f.begin(), min_it);
+
+    // Compute local times of max/min using DateTime
+    auto cycle_dt = DateTime::parseDate(cycle_date);
+    if (!cycle_dt) {
+        return Error(ApiError::ParseError, "Invalid cycle date");
+    }
+    DateTime cycle_time = cycle_dt->addHours(cycle_hour);
+
+    auto format_local_time = [&](size_t idx) -> std::string {
+        int fhr = hours[idx];
+        DateTime valid_utc = cycle_time.addHours(fhr);
+        return core::formatLocalHourMinute(valid_utc, timezone);
+    };
+
+    std::string time_of_max = format_local_time(max_idx);
+    std::string time_of_min = format_local_time(min_idx);
 
     // Round to 1 decimal place
     temp_max = std::round(temp_max * 10.0) / 10.0;
     temp_min = std::round(temp_min * 10.0) / 10.0;
 
-    // Cache to SQLite
+    // Store to SQLite
     if (db_ && db_->is_open()) {
         DailyForecast f;
         f.source = "nbm";
@@ -236,63 +190,98 @@ Result<WeatherResponse> LocalNbmClient::fetchFromGrid(double latitude,
         f.cycle_hour = cycle_hour;
         f.cycle_date = cycle_date;
         f.hours_fetched = static_cast<int>(temps_k.size());
+        f.time_of_max = time_of_max;
+        f.time_of_min = time_of_min;
         db_->putNbm(f);
     }
 
     WeatherResponse resp;
     resp.latitude = latitude;
     resp.longitude = longitude;
-    resp.timezone = "America/New_York";
+    resp.timezone = timezone;
     resp.daily.time = {target_date};
     resp.daily.temperature_2m_max = {temp_max};
     resp.daily.temperature_2m_min = {temp_min};
+    resp.daily.time_of_max = {time_of_max};
+    resp.daily.time_of_min = {time_of_min};
     return resp;
 }
 
 Result<WeatherResponse> LocalNbmClient::getForecast(double latitude,
                                                      double longitude,
                                                      const std::string& date,
-                                                     int utc_offset_hours,
+                                                     const std::string& timezone,
                                                      const std::string& asOf_iso) {
-    auto [cycle_date, cycle_hour] = findBestCycle(date, asOf_iso);
+    using core::DateTime;
+    using core::NbmCycle;
 
-    // Try SQLite cache first
-    if (db_ && db_->is_open()) {
-        auto forecast = db_->getNbm(date, cycle_hour, latitude, longitude);
-        if (forecast) {
-            WeatherResponse resp;
-            resp.latitude = forecast->latitude;
-            resp.longitude = forecast->longitude;
-            resp.timezone = "UTC";  // We're explicit about timezone now
-            resp.daily.time = {date};
-            resp.daily.temperature_2m_max = {forecast->temp_max_f};
-            resp.daily.temperature_2m_min = {forecast->temp_min_f};
-            return resp;
+    auto [start_cycle_date, start_cycle_hour] = findBestCycle(date, asOf_iso);
+
+    // Walk back through cycles (6 hours apart) until one covers the target's
+    // local day. Today's 13Z cannot predict today's daily min/max because
+    // ~midnight–morning local already happened, so coverage is < 20 hours and
+    // fetchFromGrid rejects. Fall back to 07Z, 01Z, yesterday's 19Z, etc.
+    DateTime probe = NbmCycle(start_cycle_date, start_cycle_hour).nominalTime();
+    std::string last_cycle_date = start_cycle_date;
+    int last_cycle_hour = start_cycle_hour;
+
+    constexpr int kMaxCycleFallbacks = 6;  // 6 cycles = ~1.5 days back
+    for (int attempt = 0; attempt < kMaxCycleFallbacks; ++attempt) {
+        NbmCycle c(probe);
+        last_cycle_date = c.date();
+        last_cycle_hour = c.hour();
+
+        // Try SQLite database first
+        if (db_ && db_->is_open()) {
+            auto forecast = db_->getNbm(date, last_cycle_hour, latitude, longitude);
+            if (forecast && !forecast->time_of_max.empty() &&
+                !forecast->time_of_min.empty()) {
+                WeatherResponse resp;
+                resp.latitude = forecast->latitude;
+                resp.longitude = forecast->longitude;
+                resp.timezone = timezone;
+                resp.daily.time = {date};
+                resp.daily.temperature_2m_max = {forecast->temp_max_f};
+                resp.daily.temperature_2m_min = {forecast->temp_min_f};
+                resp.daily.time_of_max = {forecast->time_of_max};
+                resp.daily.time_of_min = {forecast->time_of_min};
+                return resp;
+            }
         }
+
+        // Fall back to grid files
+        if (grid_reader_) {
+            auto result = fetchFromGrid(latitude, longitude, date,
+                                          last_cycle_date, last_cycle_hour, timezone);
+            if (result.ok()) {
+                return result;
+            }
+        }
+
+        // Step back 6 hours to the previous NBM cycle and try again.
+        probe = probe.addHours(-6);
     }
 
-    // Fall back to grid files
-    if (grid_reader_) {
-        auto result = fetchFromGrid(latitude, longitude, date, cycle_date, cycle_hour, utc_offset_hours);
-        if (result.ok()) {
-            return result;
-        }
-    }
-
-    // Neither cache nor grid available
+    // No cycle in the search window had sufficient coverage. Most often this
+    // means we don't have grid files for cycles old enough to cover the
+    // target date — usually fixed by `weather nbm update` or `nbm capture`.
     std::ostringstream msg;
-    msg << "No forecast available for " << date << " cycle " << cycle_hour
-        << " at (" << latitude << ", " << longitude << "). "
-        << "Run `nbm capture` to download grids or `nbm download` to fetch points.";
+    msg << "No forecast available for " << date
+        << " (tried " << kMaxCycleFallbacks << " cycles back from "
+        << start_cycle_date << " " << start_cycle_hour << "Z) "
+        << "at (" << latitude << ", " << longitude << "). "
+        << "Run `weather nbm update` to refresh incomplete cycles from S3, "
+        << "or `weather nbm capture --date " << last_cycle_date
+        << " --cycle " << last_cycle_hour << "` to force-fetch this specific cycle.";
     return Error(ApiError::HttpError, msg.str());
 }
 
 Result<WeatherResponse> LocalNbmClient::getActuals(double latitude,
                                                     double longitude,
                                                     const std::string& date,
-                                                    int utc_offset_hours) {
+                                                    const std::string& timezone) {
     std::string asOf = date + "T23:59:00Z";
-    return getForecast(latitude, longitude, date, utc_offset_hours, asOf);
+    return getForecast(latitude, longitude, date, timezone, asOf);
 }
 
 }  // namespace predibloom::api
