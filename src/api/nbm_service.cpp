@@ -5,13 +5,18 @@
 #include <sqlite3.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <future>
 #include <iomanip>
+#include <mutex>
 #include <set>
 #include <sstream>
+#include <thread>
+#include <vector>
 
 namespace predibloom::api {
 
@@ -90,6 +95,10 @@ void NbmService::setProgressCallback(CaptureProgressCallback callback) {
     progress_callback_ = std::move(callback);
 }
 
+void NbmService::setParallelDownloads(int n) {
+    parallel_downloads_ = std::max(1, n);
+}
+
 const std::string& NbmService::dbPath() const {
     static std::string empty;
     return db_ ? db_->db_path() : empty;
@@ -109,7 +118,7 @@ const std::string& NbmService::gridBaseDir() const {
 
 Result<DailyForecast> NbmService::fetchDailyForecast(const std::string& target_date,
                                                        double lat, double lon,
-                                                       int utc_offset_hours,
+                                                       const std::string& timezone,
                                                        const std::string& asOf_iso) {
     using core::DateTime;
     using core::NbmCycle;
@@ -143,7 +152,7 @@ Result<DailyForecast> NbmService::fetchDailyForecast(const std::string& target_d
     // Try to fetch from grid files
     if (grid_reader_) {
         core::NbmCycle cycle(cycle_date, cycle_hour);
-        auto hours = cycle.forecastHoursFor(target_date, utc_offset_hours);
+        auto hours = cycle.forecastHoursFor(target_date, timezone);
 
         std::vector<double> temps_k;
         std::vector<int> valid_hours;
@@ -182,11 +191,7 @@ Result<DailyForecast> NbmService::fetchDailyForecast(const std::string& target_d
             auto format_local_time = [&](size_t idx) -> std::string {
                 int fhr = valid_hours[idx];
                 DateTime valid_utc = cycle_time.addHours(fhr);
-                DateTime local_time = valid_utc.addHours(utc_offset_hours);
-                char buf[8];
-                std::snprintf(buf, sizeof(buf), "%02d:%02d",
-                              local_time.hour(), local_time.minute());
-                return buf;
+                return core::formatLocalHourMinute(valid_utc, timezone);
             };
 
             DailyForecast f;
@@ -213,7 +218,7 @@ Result<DailyForecast> NbmService::fetchDailyForecast(const std::string& target_d
 
     // Fall back to downloading from S3 if we have no local data
     core::NbmCycle cycle(cycle_date, cycle_hour);
-    auto hours = cycle.forecastHoursFor(target_date, utc_offset_hours);
+    auto hours = cycle.forecastHoursFor(target_date, timezone);
 
     if (hours.empty()) {
         return Error(ApiError::DataError, "No forecast hours available for " + target_date);
@@ -262,11 +267,7 @@ Result<DailyForecast> NbmService::fetchDailyForecast(const std::string& target_d
     auto format_local_time = [&](size_t idx) -> std::string {
         int fhr = valid_hours[idx];
         core::DateTime valid_utc = cycle_time.addHours(fhr);
-        core::DateTime local_time = valid_utc.addHours(utc_offset_hours);
-        char buf[8];
-        std::snprintf(buf, sizeof(buf), "%02d:%02d",
-                      local_time.hour(), local_time.minute());
-        return buf;
+        return core::formatLocalHourMinute(valid_utc, timezone);
     };
 
     DailyForecast f;
@@ -406,6 +407,13 @@ Result<std::string> NbmService::extractToNetCDF(const std::string& grib_path,
     std::filesystem::path p(nc_path);
     std::filesystem::create_directories(p.parent_path());
 
+    // HDF5 (and therefore netCDF4) is not thread-safe unless built with
+    // --enable-threadsafe; the system lib on macOS isn't. Serialize all
+    // nc_*/H5* access from create through close to avoid SEGVs in
+    // H5CX_get_tag etc. when multiple workers extract concurrently.
+    static std::mutex hdf5_mutex;
+    std::lock_guard<std::mutex> hdf5_lock(hdf5_mutex);
+
     // Write NetCDF4
     int ncid;
     checkNc(nc_create(nc_path.c_str(), NC_NETCDF4 | NC_CLOBBER, &ncid), "create nc");
@@ -501,7 +509,8 @@ Result<std::string> NbmService::extractToNetCDF(const std::string& grib_path,
 }
 
 Result<CaptureStats> NbmService::captureCycle(const std::string& date, int cycle_hour,
-                                                const std::vector<int>& forecast_hours) {
+                                                const std::vector<int>& forecast_hours,
+                                                DownloadProgress* progress) {
     // Check if cycle is available
     if (!downloader_->isCycleAvailable(date, cycle_hour)) {
         CaptureStats stats;
@@ -518,50 +527,98 @@ Result<CaptureStats> NbmService::captureCycle(const std::string& date, int cycle
         }
     }
 
+    // Filter out already-existing files
+    std::vector<int> hours_to_download;
+    int skipped_existing = 0;
+    for (int fhr : hours) {
+        std::string nc_path = ncPath(grid_base_dir_, date, cycle_hour, fhr);
+        if (std::filesystem::exists(nc_path)) {
+            skipped_existing++;
+        } else {
+            hours_to_download.push_back(fhr);
+        }
+    }
+
     CaptureStats stats;
+    stats.skipped = skipped_existing;
     int total = static_cast<int>(hours.size());
 
-    for (int i = 0; i < total; ++i) {
-        int fhr = hours[i];
-        std::string nc_path = ncPath(grid_base_dir_, date, cycle_hour, fhr);
+    if (hours_to_download.empty()) {
+        if (progress_callback_) {
+            progress_callback_(total, total, date, cycle_hour, 0, "cached");
+        }
+        return stats;
+    }
+
+    // Thread-safe counters
+    std::mutex mutex;
+    std::atomic<int> completed{0};
+
+    // Download function for a single forecast hour
+    auto download_one = [this, &date, cycle_hour, &stats, &mutex, &completed, total, skipped_existing, progress](int fhr) {
         std::string status;
 
-        if (std::filesystem::exists(nc_path)) {
-            stats.skipped++;
-            status = "skip";
-        } else {
-            // Download GRIB2
-            auto grib_result = downloader_->downloadGrib(date, cycle_hour, fhr);
-            if (!grib_result.ok()) {
-                if (grib_result.error().http_status == 404) {
-                    // f001-f036 should have 2t, but higher hours may not
-                    stats.skipped++;
-                    status = "no2t";
-                } else {
-                    stats.failed++;
-                    status = "FAIL";
-                }
+        // Download GRIB2
+        auto grib_result = downloader_->downloadGrib(date, cycle_hour, fhr, progress);
+        if (!grib_result.ok()) {
+            if (grib_result.error().http_status == 404) {
+                status = "no2t";
+                std::lock_guard<std::mutex> lock(mutex);
+                stats.skipped++;
             } else {
-                // Extract to NetCDF
-                auto nc_result = extractToNetCDF(grib_result.value(), date, cycle_hour, fhr);
-                if (nc_result.ok()) {
-                    stats.success++;
-                    status = "ok";
+                status = "FAIL";
+                std::lock_guard<std::mutex> lock(mutex);
+                stats.failed++;
+            }
+        } else {
+            // Extract to NetCDF
+            auto nc_result = extractToNetCDF(grib_result.value(), date, cycle_hour, fhr);
+            if (nc_result.ok()) {
+                status = "ok";
+                std::lock_guard<std::mutex> lock(mutex);
+                stats.success++;
+            } else {
+                if (nc_result.error().message.find("No 2m temperature") != std::string::npos) {
+                    status = "no2t";
+                    std::lock_guard<std::mutex> lock(mutex);
+                    stats.skipped++;
                 } else {
-                    if (nc_result.error().message.find("No 2m temperature") != std::string::npos) {
-                        stats.skipped++;
-                        status = "no2t";
-                    } else {
-                        stats.failed++;
-                        status = "FAIL";
-                    }
+                    status = "FAIL";
+                    std::lock_guard<std::mutex> lock(mutex);
+                    stats.failed++;
                 }
             }
         }
 
+        // Update progress
+        int done = ++completed;
         if (progress_callback_) {
-            progress_callback_(i + 1, total, date, cycle_hour, fhr, status);
+            std::lock_guard<std::mutex> lock(mutex);
+            progress_callback_(done + skipped_existing, total, date, cycle_hour, fhr, status);
         }
+    };
+
+    // Parallel downloads using thread pool pattern
+    std::vector<std::future<void>> futures;
+    size_t batch_start = 0;
+
+    while (batch_start < hours_to_download.size()) {
+        // Launch a batch of parallel downloads
+        size_t batch_end = std::min(batch_start + parallel_downloads_,
+                                     hours_to_download.size());
+
+        for (size_t i = batch_start; i < batch_end; ++i) {
+            futures.push_back(std::async(std::launch::async, download_one,
+                                          hours_to_download[i]));
+        }
+
+        // Wait for this batch to complete
+        for (auto& f : futures) {
+            f.get();
+        }
+        futures.clear();
+
+        batch_start = batch_end;
     }
 
     return stats;
@@ -576,21 +633,13 @@ Result<CaptureStats> NbmService::captureMissing(int days) {
         return stats;
     }
 
-    // Get captured cycles
-    auto captured = listCapturedGrids();
-    std::set<std::pair<std::string, int>> captured_set;
-    for (const auto& c : captured) {
-        if (c.file_count >= 10) {  // Consider captured if at least 10 hours
-            captured_set.insert({c.cycle_date, c.cycle_hour});
-        }
-    }
-
-    // Find missing
+    // Always attempt every available cycle. captureCycle skips fhrs that
+    // already exist locally, so this is cheap and incremental — and crucially
+    // retries cycles that were captured before NBM finished publishing all
+    // forecast hours. The previous file_count >= 10 heuristic missed those.
     std::vector<std::pair<std::string, int>> missing;
     for (const auto& r : remote_result.value()) {
-        if (captured_set.count({r.date, r.cycle_hour}) == 0) {
-            missing.push_back({r.date, r.cycle_hour});
-        }
+        missing.push_back({r.date, r.cycle_hour});
     }
 
     CaptureStats total_stats;

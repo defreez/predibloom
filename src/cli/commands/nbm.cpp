@@ -4,13 +4,17 @@
 #include "../../core/datetime.hpp"
 #include "../formatters.hpp"
 
+#include <indicators/progress_bar.hpp>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace predibloom::cli {
@@ -121,7 +125,7 @@ std::string formatDouble(double v) {
 
 }  // namespace
 
-int runNbmDownload(const core::Config& config,
+int runNbmExtract(const core::Config& config,
                    const std::string& start_date,
                    const std::string& end_date) {
     std::vector<const core::TrackedSeries*> nbm_series;
@@ -165,7 +169,7 @@ int runNbmDownload(const core::Config& config,
                 date, sc->entry_day_offset, sc->effectiveEntryHour());
 
             auto result = nbm_client.getForecast(sc->latitude, sc->longitude, date,
-                sc->utc_offset_hours, as_of);
+                sc->timezone, as_of);
             if (result.ok()) {
                 success++;
                 city_success++;
@@ -248,7 +252,7 @@ int runNbmRemote(const std::string& date,
     auto grid_rows = service.listCapturedGrids();
     std::set<std::pair<std::string, int>> cached;
     for (const auto& r : grid_rows) {
-        if (r.file_count >= 10) {
+        if (r.file_count >= 36) {
             cached.insert({r.cycle_date, r.cycle_hour});
         }
     }
@@ -282,7 +286,7 @@ int runNbmFetch(double lat,
     api::NbmService service;
 
     // Note: force flag is not implemented (would need to clear cache first)
-    auto result = service.fetchDailyForecast(date, lat, lon, -5, as_of);
+    auto result = service.fetchDailyForecast(date, lat, lon, "America/New_York", as_of);
 
     if (!result.ok()) {
         std::cerr << "error: " << result.error().message << "\n";
@@ -429,14 +433,11 @@ int runNbmCapture(const std::string& date,
     return total.failed > 0 ? 1 : 0;
 }
 
-int runNbmCaptureMissing(int days, const std::string& format) {
+int runNbmCaptureMissing(int days, int parallel) {
     api::NbmService service;
+    service.setParallelDownloads(parallel);
 
-    bool is_json = parseFormat(format) == OutputFormat::Json;
-
-    if (!is_json) {
-        std::cerr << "Scanning S3 for last " << days << " days...\n";
-    }
+    std::cerr << "Scanning S3 for last " << days << " days...\n";
 
     // Get remote cycles for display
     auto remote_result = service.listRemoteCycles(days);
@@ -448,7 +449,7 @@ int runNbmCaptureMissing(int days, const std::string& format) {
     auto captured = service.listCapturedGrids();
     std::set<std::pair<std::string, int>> captured_set;
     for (const auto& c : captured) {
-        if (c.file_count >= 10) {
+        if (c.file_count >= 36) {
             captured_set.insert({c.cycle_date, c.cycle_hour});
         }
     }
@@ -462,89 +463,141 @@ int runNbmCaptureMissing(int days, const std::string& format) {
     }
 
     if (missing.empty()) {
-        if (!is_json) {
-            std::cerr << "All available cycles are captured.\n";
-        }
-        if (is_json) {
-            nlohmann::json j;
-            j["missing"] = 0;
-            j["captured"] = 0;
-            std::cout << j.dump(2) << "\n";
-        }
+        std::cerr << "\033[32m✓\033[0m All cycles up to date\n";
         return 0;
     }
 
-    if (!is_json) {
-        std::cerr << "Found " << missing.size() << " missing cycles\n\n";
+    int num_cycles = static_cast<int>(missing.size());
+
+    // Get actual file sizes from S3
+    std::cerr << "Querying S3 for file sizes...\n";
+    api::NbmDownloader downloader;
+    int64_t total_bytes = 0;
+    int total_files = 0;
+    for (const auto& [date, hour] : missing) {
+        auto files_result = downloader.listCycleFiles(date, hour);
+        if (files_result.ok()) {
+            for (const auto& f : files_result.value()) {
+                if (f.forecast_hour >= 1 && f.forecast_hour <= 36) {
+                    total_bytes += f.size_bytes;
+                    total_files++;
+                }
+            }
+        }
     }
 
-    api::CaptureStats total = {0, 0, 0, ""};
-    int num_cycles = static_cast<int>(missing.size());
+    double total_mb = total_bytes / 1024.0 / 1024.0;
+    std::cerr << "\n";
+    std::cerr << "  \033[1mDownloading NBM temperature grids from NOAA S3\033[0m\n\n";
+    std::cerr << "    " << num_cycles << " cycles × 36 forecast hours = "
+              << total_files << " files (" << std::fixed << std::setprecision(0) << total_mb << " MB)\n";
+    std::cerr << "    " << parallel << " parallel downloads\n\n";
+
+    // Shared progress tracker
+    api::DownloadProgress progress;
+    progress.files_total = total_files;
+    progress.bytes_total = total_bytes;
+
+    // Progress display state
+    std::atomic<bool> done{false};
+    std::string current_cycle_str;
+    std::mutex cycle_mutex;
+
     auto start_time = std::chrono::steady_clock::now();
+
+    // Overall progress bar (bytes-based, actual total from S3).
+    // Keep the line short so it doesn't wrap in narrow terminals — when it
+    // wraps, the bar's '\r' redraw only clears the last line and stacks below.
+    using namespace indicators;
+    ProgressBar overall_bar(
+        option::BarWidth{30},
+        option::ForegroundColor{Color::green},
+        option::ShowPercentage{true},
+        option::ShowElapsedTime{false},
+        option::ShowRemainingTime{true},
+        option::PrefixText{"  "},
+        option::Start{"["},
+        option::Fill{"█"},
+        option::Lead{"█"},
+        option::Remainder{"░"},
+        option::End{"]"},
+        option::MaxProgress{static_cast<size_t>(total_bytes)}
+    );
+
+    // Start progress display thread
+    std::thread display_thread([&]() {
+        while (!done) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            int files = progress.files_done.load();
+            int64_t bytes = progress.bytes_downloaded.load();
+
+            std::string cycle_info;
+            {
+                std::lock_guard<std::mutex> lock(cycle_mutex);
+                cycle_info = current_cycle_str;
+            }
+
+            std::ostringstream postfix;
+            postfix << " " << files << "/" << progress.files_total
+                    << " " << cycle_info;
+            overall_bar.set_option(option::PostfixText{postfix.str()});
+            overall_bar.set_progress(bytes);
+        }
+    });
+
+    api::CaptureStats total = {0, 0, 0, ""};
 
     for (int idx = 0; idx < num_cycles; ++idx) {
         const std::string& cycle_date = missing[idx].first;
         int cycle_hour = missing[idx].second;
 
-        if (!is_json) {
-            // Set up progress callback
-            service.setProgressCallback([idx, num_cycles, cycle_date, cycle_hour, &total](
-                int current, int total_files,
-                const std::string& /*d*/, int /*h*/,
-                int fhr, const std::string& status) {
-                int pct = (current * 100) / total_files;
-                std::cerr << "\r[" << (idx + 1) << "/" << num_cycles << "] "
-                          << cycle_date << " " << cycle_hour << "Z  f"
-                          << std::setw(3) << std::setfill('0') << fhr
-                          << " [" << std::setw(3) << std::setfill(' ') << pct << "%] "
-                          << status << " | +"
-                          << total.success << " skip:" << total.skipped
-                          << " fail:" << total.failed << "   " << std::flush;
-            });
+        // Update current cycle display
+        {
+            std::lock_guard<std::mutex> lock(cycle_mutex);
+            std::ostringstream ss;
+            ss << "[" << (idx + 1) << "/" << num_cycles << "] "
+               << cycle_date << " " << std::setw(2) << std::setfill('0') << cycle_hour << "Z";
+            current_cycle_str = ss.str();
         }
 
-        auto result = service.captureCycle(cycle_date, cycle_hour, {});
-
-        if (!is_json) {
-            std::cerr << "\n";
-        }
+        auto result = service.captureCycle(cycle_date, cycle_hour, {}, &progress);
 
         if (result.ok()) {
             total.success += result.value().success;
             total.failed += result.value().failed;
             total.skipped += result.value().skipped;
         }
-
-        // Show elapsed and estimated time
-        if (!is_json && idx > 0) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-            double per_cycle = static_cast<double>(elapsed) / (idx + 1);
-            auto remaining = static_cast<int>(per_cycle * (num_cycles - idx - 1));
-
-            int elapsed_min = elapsed / 60;
-            int elapsed_sec = elapsed % 60;
-            int remaining_min = remaining / 60;
-            int remaining_sec = remaining % 60;
-
-            std::cerr << "  elapsed: " << elapsed_min << "m"
-                      << std::setw(2) << std::setfill('0') << elapsed_sec << "s"
-                      << "  remaining: ~" << remaining_min << "m"
-                      << std::setw(2) << std::setfill('0') << remaining_sec << "s\n";
-        }
     }
 
-    if (is_json) {
-        nlohmann::json j;
-        j["success"] = total.success;
-        j["failed"] = total.failed;
-        j["skipped"] = total.skipped;
-        std::cout << j.dump(2) << "\n";
-    } else {
-        std::cout << "Success: " << total.success
-                  << "  Failed: " << total.failed
-                  << "  Skipped: " << total.skipped << "\n";
+    // Stop display thread
+    done = true;
+    if (display_thread.joinable()) {
+        display_thread.join();
     }
+
+    // Mark overall bar as complete
+    overall_bar.set_progress(progress.bytes_downloaded.load());
+    overall_bar.mark_as_completed();
+
+    // Final summary
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+    int elapsed_min = elapsed / 60;
+    int elapsed_sec = elapsed % 60;
+    int64_t downloaded_mb = progress.bytes_downloaded / 1024 / 1024;
+
+    std::cout << "\n  \033[32m✓\033[0m Done in " << elapsed_min << "m"
+              << std::setw(2) << std::setfill('0') << elapsed_sec << "s"
+              << " (" << downloaded_mb << " MB)\n\n";
+    std::cout << "    \033[32m" << total.success << "\033[0m downloaded";
+    if (total.skipped > 0) {
+        std::cout << "  \033[33m" << total.skipped << "\033[0m skipped";
+    }
+    if (total.failed > 0) {
+        std::cout << "  \033[31m" << total.failed << "\033[0m failed";
+    }
+    std::cout << "\n\n";
 
     return total.failed > 0 ? 1 : 0;
 }
