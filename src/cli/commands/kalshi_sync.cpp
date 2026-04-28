@@ -1,9 +1,12 @@
 #include "kalshi_sync.hpp"
 #include "../../api/local_kalshi_client.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <thread>
+#include <vector>
 
 namespace predibloom::cli {
 
@@ -77,17 +80,71 @@ int runKalshiSync(const core::Config& config,
 
         int total_trades = 0;
         int new_trades = 0;
+        std::vector<std::pair<std::string, std::string>> failed_markets;  // ticker, error message
+        auto trades_start = std::chrono::steady_clock::now();
+
         for (size_t i = 0; i < markets.size(); i++) {
-            auto trades_result = local.syncTrades(client, markets[i].ticker);
-            if (trades_result.ok()) {
-                total_trades += trades_result.value().total_count;
-                new_trades += trades_result.value().new_count;
+            // Retry loop for transient errors
+            int retries = 0;
+            constexpr int max_retries = 3;
+            api::Result<api::SyncStats> trades_result = api::Error(api::ApiError::NetworkError, "init");
+
+            while (retries <= max_retries) {
+                trades_result = local.syncTrades(client, markets[i].ticker);
+                if (trades_result.ok()) {
+                    total_trades += trades_result.value().total_count;
+                    new_trades += trades_result.value().new_count;
+                    break;
+                }
+
+                // Retry on transient errors (rate limit, network)
+                auto err_type = trades_result.error().type;
+                bool is_transient = (err_type == api::ApiError::RateLimitError ||
+                                     err_type == api::ApiError::NetworkError);
+                if (is_transient && retries < max_retries) {
+                    retries++;
+                    std::this_thread::sleep_for(std::chrono::seconds(2 * retries));
+                    continue;
+                }
+
+                // Non-retryable or max retries exceeded
+                failed_markets.push_back({markets[i].ticker, trades_result.error().message});
+                break;
             }
-            // Update progress
+
+            // Update progress with ETA
+            auto now = std::chrono::steady_clock::now();
+            double elapsed_sec = std::chrono::duration<double>(now - trades_start).count();
+            double rate = (i + 1) / elapsed_sec;  // markets per second
+            int remaining = static_cast<int>((markets.size() - i - 1) / rate);
+            int eta_min = remaining / 60;
+            int eta_sec = remaining % 60;
+
             std::cerr << "\r  Trades: " << (i + 1) << "/" << markets.size()
-                      << " markets, " << total_trades << " trades" << std::flush;
+                      << " markets, " << total_trades << " trades";
+            if (i > 0 && i + 1 < markets.size()) {
+                std::cerr << " (ETA: " << eta_min << "m" << eta_sec << "s)";
+            }
+            std::cerr << "        " << std::flush;  // padding to clear old text
         }
-        std::cerr << " (" << new_trades << " new)\n";
+
+        std::cerr << " (" << new_trades << " new";
+        if (!failed_markets.empty()) {
+            std::cerr << ", " << failed_markets.size() << " failed";
+        }
+        std::cerr << ")\n";
+
+        // Show first few errors if any
+        if (!failed_markets.empty()) {
+            std::cerr << "  Failed markets:\n";
+            size_t show_count = std::min(failed_markets.size(), size_t(5));
+            for (size_t i = 0; i < show_count; i++) {
+                std::cerr << "    " << failed_markets[i].first << ": " << failed_markets[i].second << "\n";
+            }
+            if (failed_markets.size() > 5) {
+                std::cerr << "    ... and " << (failed_markets.size() - 5) << " more\n";
+            }
+        }
     }
 
     auto end_time = std::chrono::steady_clock::now();

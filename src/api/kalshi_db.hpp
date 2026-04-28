@@ -16,8 +16,8 @@ struct SyncStats {
     int total_count = 0;
 };
 
-// SQLite database for cached Kalshi market and trade data.
-// Shares the same database file as ForecastDb (~/.cache/predibloom/forecasts.db).
+// SQLite database for Kalshi market and trade data.
+// Shares the same database file as ForecastDb (~/.local/share/predibloom/predibloom.db).
 class KalshiDb {
 public:
     KalshiDb();

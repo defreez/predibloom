@@ -15,7 +15,7 @@ std::string default_db_path() {
     if (!home) {
         throw std::runtime_error("HOME environment variable not set");
     }
-    return std::string(home) + "/.cache/predibloom/forecasts.db";
+    return std::string(home) + "/.local/share/predibloom/predibloom.db";
 }
 
 }  // namespace

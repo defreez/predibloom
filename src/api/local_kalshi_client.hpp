@@ -8,7 +8,7 @@
 
 namespace predibloom::api {
 
-// Client for reading Kalshi data from the local SQLite cache.
+// Client for reading Kalshi data from the local SQLite database.
 // Provides the same interface as KalshiClient for backtest compatibility.
 // Data must be pre-populated via `kalshi sync` command.
 class LocalKalshiClient {

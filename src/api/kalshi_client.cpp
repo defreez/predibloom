@@ -130,6 +130,50 @@ Result<EventsResponse> KalshiClient::getEvents(const GetEventsParams& params) {
     }
 }
 
+Result<Market> KalshiClient::getMarket(const std::string& ticker) {
+    std::string path = std::string(API_BASE) + "/markets/" + ticker;
+    auto cache_key = HttpCache::key(API_HOST, path);
+
+    std::string body;
+    auto cached = caching_ ? HttpCache::get(cache_key) : std::nullopt;
+    if (cached) {
+        body = *cached;
+    } else {
+        rate_limiter_.wait_for_token();
+        auto res = client_->Get(path);
+
+        if (!res) {
+            return Error(ApiError::NetworkError,
+                "Network error: " + httplib::to_string(res.error()));
+        }
+
+        if (res->status == 429) {
+            return Error(ApiError::RateLimitError, "Rate limit exceeded", 429);
+        }
+
+        if (res->status == 404) {
+            return Error(ApiError::HttpError, "Market not found", 404);
+        }
+
+        if (res->status != 200) {
+            return Error(ApiError::HttpError,
+                "HTTP error: " + std::to_string(res->status), res->status);
+        }
+
+        body = res->body;
+        if (caching_) HttpCache::put(cache_key, body);
+    }
+
+    try {
+        auto json = nlohmann::json::parse(body);
+        // API returns { "market": { ... } }
+        return json.at("market").get<Market>();
+    } catch (const nlohmann::json::exception& e) {
+        return Error(ApiError::ParseError,
+            std::string("JSON parse error: ") + e.what());
+    }
+}
+
 Result<MarketsResponse> KalshiClient::getMarkets(const GetMarketsParams& params) {
     std::string path = std::string(API_BASE) + "/markets" + buildQueryString(params);
     auto cache_key = HttpCache::key(API_HOST, path);

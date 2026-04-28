@@ -72,6 +72,7 @@ public:
 
     Result<EventsResponse> getEvents(const GetEventsParams& params = {});
     Result<MarketsResponse> getMarkets(const GetMarketsParams& params = {});
+    Result<Market> getMarket(const std::string& ticker);
     Result<Orderbook> getOrderbook(const std::string& ticker, int depth = 0);
     Result<std::vector<Market>> getAllMarkets(const GetMarketsParams& params = {});
     Result<TradesResponse> getTrades(const GetTradesParams& params);
