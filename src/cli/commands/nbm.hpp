@@ -5,10 +5,11 @@
 
 namespace predibloom::cli {
 
-// Bulk-download NBM data for every configured series with weather_source=local_nbm.
-int runNbmDownload(const core::Config& config,
-                   const std::string& start_date,
-                   const std::string& end_date);
+// Aggregate hourly grid points to daily min/max for every configured series
+// with weather_source=local_nbm. Reads local NetCDF grids, stores to SQLite.
+int runNbmExtract(const core::Config& config,
+                  const std::string& start_date,
+                  const std::string& end_date);
 
 // List forecasts already stored in the local NBM database.
 int runNbmList(const std::string& date,
@@ -43,8 +44,7 @@ int runNbmCapture(const std::string& date,
                   const std::string& format);
 
 // Scan S3 for available cycles and download missing ones.
-int runNbmCaptureMissing(int days,
-                         const std::string& format);
+int runNbmCaptureMissing(int days, int parallel);
 
 // Delete grid files older than specified days.
 int runNbmCleanup(int older_than_days,

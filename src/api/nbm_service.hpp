@@ -36,15 +36,19 @@ public:
     // Set progress callback for capture operations
     void setProgressCallback(CaptureProgressCallback callback);
 
+    // Set number of parallel downloads (default 8)
+    void setParallelDownloads(int n);
+
     // =========================================================================
     // Point forecast operations (replaces 'fetch' command)
     // =========================================================================
 
     // Fetch daily forecast for a location.
+    // timezone: IANA name (e.g., "America/New_York") of the settlement station.
     // If asOf_iso is non-empty, use the NBM cycle available at that time.
     Result<DailyForecast> fetchDailyForecast(const std::string& target_date,
                                               double lat, double lon,
-                                              int utc_offset_hours = -5,
+                                              const std::string& timezone = "America/New_York",
                                               const std::string& asOf_iso = "");
 
     // =========================================================================
@@ -63,14 +67,16 @@ public:
     Result<std::vector<NbmCycleInfo>> listRemoteCycles(int days = 10);
 
     // =========================================================================
-    // Grid capture operations (replaces 'capture', 'capture-missing' commands)
+    // Grid capture operations (replaces 'capture', 'update' commands)
     // =========================================================================
 
     // Capture a single NBM cycle to local storage.
     // Downloads GRIB2 files, extracts 2m temp to NetCDF4, updates index.
     // If forecast_hours is empty, defaults to 1-36 (all hours with 2t).
+    // If progress is non-null, updates it with download progress.
     Result<CaptureStats> captureCycle(const std::string& date, int cycle_hour,
-                                       const std::vector<int>& forecast_hours = {});
+                                       const std::vector<int>& forecast_hours = {},
+                                       DownloadProgress* progress = nullptr);
 
     // Capture all missing cycles (scan S3, download what's not captured)
     Result<CaptureStats> captureMissing(int days = 10);
@@ -122,6 +128,7 @@ private:
     std::string grid_index_db_;  // ~/.cache/predibloom/nbm/index.db
 
     CaptureProgressCallback progress_callback_;
+    int parallel_downloads_ = 8;
 };
 
 }  // namespace predibloom::api

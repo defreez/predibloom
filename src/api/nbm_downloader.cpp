@@ -73,13 +73,23 @@ std::string NbmDownloader::localPath(const std::string& cycle_date,
 
 Result<std::string> NbmDownloader::downloadGrib(const std::string& cycle_date,
                                                   int cycle_hour,
-                                                  int forecast_hour) {
+                                                  int forecast_hour,
+                                                  DownloadProgress* progress) {
     std::string local_path = localPath(cycle_date, cycle_hour, forecast_hour);
+
+    // Clean up any stale temp file from interrupted download
+    std::string temp_path = local_path + ".tmp";
+    if (std::filesystem::exists(temp_path)) {
+        std::filesystem::remove(temp_path);
+    }
 
     // Check if already exists
     if (std::filesystem::exists(local_path)) {
         auto size = std::filesystem::file_size(local_path);
         if (size > 0) {
+            if (progress) {
+                progress->files_done++;
+            }
             return local_path;
         }
     }
@@ -97,13 +107,40 @@ Result<std::string> NbmDownloader::downloadGrib(const std::string& cycle_date,
             << ".co.grib2";
     std::string url_path = path_ss.str();
 
-    // Download via HTTPS
+    // Download via HTTPS with progress tracking
     httplib::SSLClient client(S3_HOST);
     client.set_connection_timeout(30);
     client.set_read_timeout(120);
     client.set_follow_location(true);
 
-    auto res = client.Get(url_path.c_str());
+    std::string body;
+    int64_t content_length = 0;
+    int worker_slot = -1;
+    int64_t bytes_received = 0;
+
+    auto res = client.Get(url_path.c_str(),
+        [&](const httplib::Response& response) {
+            // Get content length from headers
+            auto it = response.headers.find("Content-Length");
+            if (it != response.headers.end()) {
+                content_length = std::stoll(it->second);
+                if (progress) {
+                    worker_slot = progress->claimWorker(forecast_hour, content_length);
+                }
+            }
+            return true;
+        },
+        [&](const char* data, size_t len) {
+            body.append(data, len);
+            bytes_received += len;
+            if (progress) {
+                progress->bytes_downloaded += len;
+                if (worker_slot >= 0) {
+                    progress->updateWorker(worker_slot, bytes_received);
+                }
+            }
+            return true;
+        });
 
     if (!res) {
         return Error(ApiError::NetworkError,
@@ -111,6 +148,9 @@ Result<std::string> NbmDownloader::downloadGrib(const std::string& cycle_date,
     }
 
     if (res->status == 404) {
+        if (progress) {
+            progress->files_done++;
+        }
         return Error(ApiError::HttpError,
                      "File not found on S3 (cycle may not be available yet)",
                      404);
@@ -122,16 +162,32 @@ Result<std::string> NbmDownloader::downloadGrib(const std::string& cycle_date,
                      res->status);
     }
 
-    // Write to file
-    std::ofstream out(local_path, std::ios::binary);
+    // Write to temp file, then atomic rename (prevents corruption on Ctrl+C)
+    std::ofstream out(temp_path, std::ios::binary);
     if (!out) {
-        return Error(ApiError::NetworkError, "Failed to create file: " + local_path);
+        return Error(ApiError::NetworkError, "Failed to create file: " + temp_path);
     }
-    out.write(res->body.data(), res->body.size());
+    out.write(body.data(), body.size());
     out.close();
 
     if (!out) {
-        return Error(ApiError::NetworkError, "Failed to write file: " + local_path);
+        std::filesystem::remove(temp_path);
+        return Error(ApiError::NetworkError, "Failed to write file: " + temp_path);
+    }
+
+    // Atomic rename
+    std::error_code ec;
+    std::filesystem::rename(temp_path, local_path, ec);
+    if (ec) {
+        std::filesystem::remove(temp_path);
+        return Error(ApiError::NetworkError, "Failed to rename temp file: " + ec.message());
+    }
+
+    if (progress) {
+        if (worker_slot >= 0) {
+            progress->releaseWorker(worker_slot);
+        }
+        progress->files_done++;
     }
 
     return local_path;
@@ -152,6 +208,54 @@ bool NbmDownloader::isCycleAvailable(const std::string& date, int cycle_hour) {
     auto res = client.Head(path_ss.str().c_str());
 
     return res && res->status == 200;
+}
+
+Result<std::vector<NbmFileInfo>> NbmDownloader::listCycleFiles(const std::string& date, int cycle_hour) {
+    // S3 ListObjectsV2: /?list-type=2&prefix=blend.YYYYMMDD/HH/core/blend.tHHz.core.f
+    std::ostringstream path_ss;
+    path_ss << "/?list-type=2&prefix=blend." << dateToCompact(date)
+            << "/" << std::setw(2) << std::setfill('0') << cycle_hour
+            << "/core/blend.t" << std::setw(2) << std::setfill('0') << cycle_hour
+            << "z.core.f";
+
+    httplib::SSLClient client(S3_HOST);
+    client.set_connection_timeout(10);
+    client.set_read_timeout(30);
+
+    auto res = client.Get(path_ss.str().c_str());
+    if (!res || res->status != 200) {
+        return Error(ApiError::NetworkError, "Failed to list S3 bucket");
+    }
+
+    // Parse XML response - extract forecast hour from Key and Size from each Contents block
+    // <Contents><Key>...f001.co.grib2</Key>...<Size>NNN</Size></Contents>
+    std::vector<NbmFileInfo> files;
+    std::regex contents_pattern(R"(<Contents>(.*?)</Contents>)");
+    std::regex key_pattern(R"(\.f(\d{3})\.co\.grib2</Key>)");
+    std::regex size_pattern(R"(<Size>(\d+)</Size>)");
+
+    auto begin = std::sregex_iterator(res->body.begin(), res->body.end(), contents_pattern);
+    auto end = std::sregex_iterator();
+
+    for (auto it = begin; it != end; ++it) {
+        std::string block = (*it)[1].str();
+        std::smatch key_match, size_match;
+        if (std::regex_search(block, key_match, key_pattern) &&
+            std::regex_search(block, size_match, size_pattern)) {
+            NbmFileInfo info;
+            info.forecast_hour = std::stoi(key_match[1].str());
+            info.size_bytes = std::stoll(size_match[1].str());
+            files.push_back(info);
+        }
+    }
+
+    // Sort by forecast hour
+    std::sort(files.begin(), files.end(),
+              [](const NbmFileInfo& a, const NbmFileInfo& b) {
+                  return a.forecast_hour < b.forecast_hour;
+              });
+
+    return files;
 }
 
 Result<std::vector<NbmCycleInfo>> NbmDownloader::listAvailableCycles(int days) {

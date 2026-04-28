@@ -127,13 +127,19 @@ std::optional<double> NbmGridReader::getTemp(const std::string& cycle_date,
         checkNc(nc_get_var_float(ncid, lat_varid, lats.data()), "read lat");
         checkNc(nc_get_var_float(ncid, lon_varid, lons.data()), "read lon");
 
+        // Convert longitude to 0-360 if negative (NBM grids use 0-360 convention)
+        double search_lon = lon;
+        if (search_lon < 0) {
+            search_lon += 360.0;
+        }
+
         // Find nearest grid point
         double min_dist = std::numeric_limits<double>::max();
         size_t best_idx = 0;
 
         for (size_t i = 0; i < ny * nx; ++i) {
             double dlat = lats[i] - lat;
-            double dlon = lons[i] - lon;
+            double dlon = lons[i] - search_lon;
             double dist = dlat * dlat + dlon * dlon;
             if (dist < min_dist) {
                 min_dist = dist;
@@ -151,10 +157,22 @@ std::optional<double> NbmGridReader::getTemp(const std::string& cycle_date,
         checkNc(nc_get_vara_float(ncid, temp_varid, start, count, &temp_k),
                 "read temp");
 
+        // Check the variable's _FillValue. nc_inq_var_fill returns the default
+        // (NC_FILL_FLOAT ≈ 9.97e+36) when no attribute is set, which matches
+        // what we want to reject either way.
+        int no_fill = 0;
+        float fill_value = NC_FILL_FLOAT;
+        nc_inq_var_fill(ncid, temp_varid, &no_fill, &fill_value);
+
         nc_close(ncid);
 
-        // Check for fill value / NaN
-        if (std::isnan(temp_k)) {
+        if (std::isnan(temp_k) || (no_fill == 0 && temp_k == fill_value)) {
+            return std::nullopt;
+        }
+        // Sanity bracket: real 2m air temperatures are between roughly 180K
+        // (-138°F, polar extreme) and 350K (170°F, hottest ever recorded).
+        // Anything outside this is corrupt data, not weather.
+        if (temp_k < 100.0f || temp_k > 400.0f) {
             return std::nullopt;
         }
 
