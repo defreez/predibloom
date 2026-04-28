@@ -112,3 +112,35 @@ The backtest simulates what a trader would have known at entry time. This means:
 **Why keep full GRIB2:** Potential signal in variables others ignore - dewpoint affecting "feels like", wind affecting measurement site behavior, etc.
 
 **Backtest purpose:** Not just validating accuracy - measuring how fast the edge decays. If still profitable entering 6 hours after a cycle vs 2 hours, the market is slow to price in new information.
+
+## Investigating a Trade Signal
+
+When asked to investigate a trade recommendation, follow this process:
+
+1. **Read the trading notebook** (`docs/trading_notebook.md`) for format and past examples
+
+2. **Get the series config** - Look up lat/lon, NWS station, offset from `~/.config/predibloom/config.json`
+
+3. **Check NBM forecast** - Use CLI tools, not raw sqlite:
+   ```bash
+   ./build/predibloom-cli weather nbm list --date YYYY-MM-DD --lat X --lon Y
+   ```
+
+4. **Cross-reference with NWS** - Fetch official forecast:
+   ```bash
+   curl -s "https://api.weather.gov/points/LAT,LON" | jq -r '.properties.forecast'
+   # Then fetch that URL
+   ```
+
+5. **Web search for weather surprises** - Look for cold fronts, storms, or other events that could cause the actual temp to differ from point forecasts
+
+6. **Check market price direction** - Is price rising (others agree) or falling (others see something we don't)?
+
+7. **Summarize in trading notebook format:**
+   - NBM forecast vs target bracket
+   - Margin from bracket edge
+   - Entry price and implied probability
+   - Risk factors identified
+   - Thesis for why market is mispriced (or not)
+
+**Critical: Get dates right!** Always verify what day of the week it is with `date`. A cold front arriving "Tuesday" means different things depending on whether today is Saturday or Sunday.
