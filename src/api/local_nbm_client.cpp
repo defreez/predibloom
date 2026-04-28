@@ -264,17 +264,20 @@ Result<WeatherResponse> LocalNbmClient::getForecast(double latitude,
         probe = probe.addHours(-6);
     }
 
-    // No cycle in the search window had sufficient coverage. Most often this
-    // means we don't have grid files for cycles old enough to cover the
-    // target date — usually fixed by `weather nbm update` or `nbm capture`.
+    // No cycle in the search window had sufficient (24h) coverage. Two common
+    // causes:
+    //  - target is in the future and the cycle that would cover it isn't
+    //    published yet (NBM publishes new cycles every 6h with a ~2h delay)
+    //  - we don't have the grid files for the cycle that would cover it,
+    //    fixable with `weather nbm update`
     std::ostringstream msg;
-    msg << "No forecast available for " << date
-        << " (tried " << kMaxCycleFallbacks << " cycles back from "
-        << start_cycle_date << " " << start_cycle_hour << "Z) "
-        << "at (" << latitude << ", " << longitude << "). "
-        << "Run `weather nbm update` to refresh incomplete cycles from S3, "
-        << "or `weather nbm capture --date " << last_cycle_date
-        << " --cycle " << last_cycle_hour << "` to force-fetch this specific cycle.";
+    msg << "No NBM cycle has 24h coverage of " << date << " local day at ("
+        << latitude << ", " << longitude << "). Tried cycles "
+        << start_cycle_date << " " << start_cycle_hour << "Z back through "
+        << last_cycle_date << " " << last_cycle_hour << "Z. "
+        << "If predicting a future date, the covering cycle may not be "
+        << "published yet. Otherwise run `weather nbm update` to fetch "
+        << "missing grids.";
     return Error(ApiError::HttpError, msg.str());
 }
 

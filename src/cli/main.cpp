@@ -32,12 +32,12 @@ int main(int argc, char** argv) {
     auto* fills_cmd = app.add_subcommand("fills", "Show trade fills (requires auth)");
     auto* weather_cmd = app.add_subcommand("weather", "Weather data (NBM, HRRR, etc.)");
     auto* nbm_cmd = weather_cmd->add_subcommand("nbm", "National Blend of Models (NOAA)");
-    auto* nbm_download_cmd  = nbm_cmd->add_subcommand("download",
-        "Fetch point forecasts for all series in config with weather_source=local_nbm. "
-        "Reads from local NetCDF4 grids, stores min/max temps to SQLite.");
+    auto* nbm_extract_cmd   = nbm_cmd->add_subcommand("extract",
+        "Aggregate hourly grid points into daily min/max for every configured series "
+        "with weather_source=local_nbm. Reads from local NetCDF4 grids, stores to SQLite.");
     auto* nbm_list_cmd      = nbm_cmd->add_subcommand("list",
         "Show point forecasts cached in ~/.local/share/predibloom/predibloom.db. "
-        "These are extracted from grids via 'download' or 'fetch'.");
+        "These are extracted from grids via 'extract' or 'fetch'.");
     auto* nbm_remote_cmd    = nbm_cmd->add_subcommand("remote",
         "List NBM cycles available on NOAA S3 (noaa-nbm-grib2-pds bucket). "
         "Shows cached/missing status by cross-referencing local grids.");
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     auto* nbm_capture_cmd   = nbm_cmd->add_subcommand("capture",
         "Download GRIB2 files for a cycle from S3, extract 2m temperature to NetCDF4 grids. "
         "Grids are stored in ~/.cache/predibloom/nbm/grids/.");
-    auto* nbm_capture_missing_cmd = nbm_cmd->add_subcommand("capture-missing",
+    auto* nbm_update_cmd = nbm_cmd->add_subcommand("update",
         "Scan S3 for available cycles, download any not in local grids. "
         "NOAA keeps ~10 days of data, so run this regularly to build history.");
     auto* nbm_cleanup_cmd   = nbm_cmd->add_subcommand("cleanup",
@@ -148,12 +148,16 @@ int main(int argc, char** argv) {
     // Predict command options
     std::string predict_series, predict_date, predict_cycle;
     double predict_margin = 2.0, predict_min_price = 5.0, predict_max_price = 40.0;
+    double predict_midnight_margin = 3.0;
     predict_cmd->add_option("-s,--series", predict_series, "Series ticker");
     predict_cmd->add_option("-d,--date", predict_date, "Date YYYY-MM-DD")->required();
     predict_cmd->add_option("--cycle", predict_cycle, "Forecast cycle (YYYY-MM-DDTHH, e.g. 2026-04-25T19)");
     predict_cmd->add_option("--margin", predict_margin, "Min margin (°F)")->default_val(2.0);
     predict_cmd->add_option("--min-price", predict_min_price, "Min price (cents)")->default_val(5.0);
     predict_cmd->add_option("--max-price", predict_max_price, "Max price (cents)")->default_val(40.0);
+    predict_cmd->add_option("--midnight-margin", predict_midnight_margin,
+        "Reject signals whose peak is within N hours of midnight local (default 3)")
+        ->default_val(3.0);
 
     // Fills command options
     std::string fills_ticker, fills_format = "table";
@@ -164,8 +168,8 @@ int main(int argc, char** argv) {
 
     // NBM subcommand options
     std::string nbm_start, nbm_end;
-    nbm_download_cmd->add_option("--start", nbm_start, "Start date YYYY-MM-DD")->required();
-    nbm_download_cmd->add_option("--end", nbm_end, "End date YYYY-MM-DD")->required();
+    nbm_extract_cmd->add_option("--start", nbm_start, "Start date YYYY-MM-DD")->required();
+    nbm_extract_cmd->add_option("--end", nbm_end, "End date YYYY-MM-DD")->required();
 
     std::string nbm_list_date, nbm_list_lat, nbm_list_lon, nbm_list_format = "table";
     nbm_list_cmd->add_option("--date", nbm_list_date, "Filter by date YYYY-MM-DD");
@@ -214,13 +218,13 @@ int main(int argc, char** argv) {
     nbm_capture_cmd->add_option("-f,--format", nbm_capture_format, "Output format")
         ->default_val("table")->check(CLI::IsMember({"table", "json"}));
 
-    // nbm capture-missing options
-    int nbm_capture_missing_days = 10;
-    std::string nbm_capture_missing_format = "table";
-    nbm_capture_missing_cmd->add_option("--days", nbm_capture_missing_days,
+    // nbm update options
+    int nbm_update_days = 10;
+    int nbm_update_parallel = 8;
+    nbm_update_cmd->add_option("--days", nbm_update_days,
         "How many days back to scan S3 (default 10)")->default_val(10);
-    nbm_capture_missing_cmd->add_option("-f,--format", nbm_capture_missing_format, "Output format")
-        ->default_val("table")->check(CLI::IsMember({"table", "json"}));
+    nbm_update_cmd->add_option("--parallel", nbm_update_parallel,
+        "Number of parallel downloads (default 8)")->default_val(8)->check(CLI::Range(1, 36));
 
     // nbm cleanup options
     int nbm_cleanup_older_than = 30;
@@ -359,6 +363,7 @@ int main(int argc, char** argv) {
         opts.margin = predict_margin;
         opts.min_price = predict_min_price;
         opts.max_price = predict_max_price;
+        opts.midnight_margin_hours = predict_midnight_margin;
         return predibloom::cli::runPredict(opts, config, client);
     }
 
@@ -377,17 +382,17 @@ int main(int argc, char** argv) {
     // Handle weather subcommand
     if (*weather_cmd) {
         if (*nbm_cmd) {
-            if (*nbm_download_cmd)  return predibloom::cli::runNbmDownload(config, nbm_start, nbm_end);
+            if (*nbm_extract_cmd)  return predibloom::cli::runNbmExtract(config, nbm_start, nbm_end);
             if (*nbm_list_cmd)      return predibloom::cli::runNbmList(nbm_list_date, nbm_list_lat, nbm_list_lon, nbm_list_format);
             if (*nbm_remote_cmd)    return predibloom::cli::runNbmRemote(nbm_remote_date, nbm_remote_days, "", nbm_remote_format);
             if (*nbm_fetch_cmd)     return predibloom::cli::runNbmFetch(nbm_fetch_lat, nbm_fetch_lon, nbm_fetch_date, nbm_fetch_asof, nbm_fetch_force);
             if (*nbm_inventory_cmd) return predibloom::cli::runNbmInventory(nbm_inv_date, nbm_inv_cycle, nbm_inv_fhr, nbm_inv_format);
             if (*nbm_capture_cmd) return predibloom::cli::runNbmCapture(nbm_capture_date, nbm_capture_cycle, nbm_capture_fhrs, nbm_capture_format);
-            if (*nbm_capture_missing_cmd) return predibloom::cli::runNbmCaptureMissing(nbm_capture_missing_days, nbm_capture_missing_format);
+            if (*nbm_update_cmd) return predibloom::cli::runNbmCaptureMissing(nbm_update_days, nbm_update_parallel);
             if (*nbm_cleanup_cmd) return predibloom::cli::runNbmCleanup(nbm_cleanup_older_than, nbm_cleanup_format);
             if (*nbm_grids_cmd) return predibloom::cli::runNbmGrids(nbm_grids_format);
             if (*nbm_about_cmd) return predibloom::cli::runNbmAbout();
-            std::cerr << "weather nbm requires a subcommand (download|list|remote|fetch|inventory|capture|capture-missing|cleanup|grids|about)\n";
+            std::cerr << "weather nbm requires a subcommand (extract|list|remote|fetch|inventory|capture|update|cleanup|grids|about)\n";
             return 1;
         }
         std::cerr << "weather requires a model subcommand (nbm)\n";

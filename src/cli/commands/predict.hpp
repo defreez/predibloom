@@ -13,6 +13,7 @@ struct PredictOptions {
     double margin = 2.0;     // Min margin from bracket edge (°F)
     double min_price = 5.0;  // Min price to consider (cents)
     double max_price = 40.0; // Max price to pay (cents)
+    double midnight_margin_hours = 3.0;  // Reject signals where peak is within N hours of midnight local
 };
 
 // Run the predict command

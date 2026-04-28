@@ -2,8 +2,9 @@
 #include "../bracket.hpp"
 #include "../../api/weather_client.hpp"
 #include "../../api/gribstream_types.hpp"
-#include "../../core/time_utils.hpp"
+#include "../../core/datetime.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <iomanip>
 #include <map>
@@ -34,7 +35,52 @@ struct Prediction {
     double ask;
     bool tradeable;
     bool between_brackets;
+    std::string peak;  // e.g., "4pm EDT (1pm PDT)" or "3pm PDT" for PT stations
+    int64_t peak_utc_epoch = 0;  // 0 = unknown
+    double peak_midnight_distance_hours = -1.0;  // -1 = unknown; otherwise [0, 12]
 };
+
+// Distance from local midnight to a HH:MM time string, in hours [0, 12].
+// Returns -1 on parse failure or empty input.
+double midnightDistanceHours(const std::string& hhmm_local) {
+    if (hhmm_local.size() < 4) return -1.0;
+    auto colon = hhmm_local.find(':');
+    if (colon == std::string::npos) return -1.0;
+    try {
+        int hh = std::stoi(hhmm_local.substr(0, colon));
+        int mm = std::stoi(hhmm_local.substr(colon + 1));
+        if (hh < 0 || hh >= 24 || mm < 0 || mm >= 60) return -1.0;
+        double t = hh + mm / 60.0;
+        return std::min(t, 24.0 - t);
+    } catch (...) {
+        return -1.0;
+    }
+}
+
+// Format peak time as "<station_local> (<pt>)" with the parens omitted when the
+// station is itself in Pacific Time. Returns empty string on parse failure.
+std::string formatPeakTime(const std::string& target_date,
+                           const std::string& hhmm_local,
+                           const std::string& station_tz) {
+    if (hhmm_local.empty()) return "";
+    auto utc = core::parseLocalDatetime(target_date, hhmm_local, station_tz);
+    if (!utc) return "";
+
+    std::string local_str = core::formatLocalAmPm(*utc, station_tz);
+    std::string pt_str = core::formatLocalAmPm(*utc, "America/Los_Angeles");
+    if (local_str.empty() || pt_str.empty()) return "";
+
+    // Compare just the time portion (everything before the abbreviation) to
+    // detect Pacific stations and avoid redundant "3pm PDT (3pm PDT)".
+    auto strip_abbrev = [](const std::string& s) {
+        auto sp = s.find(' ');
+        return sp == std::string::npos ? s : s.substr(0, sp);
+    };
+    if (strip_abbrev(local_str) == strip_abbrev(pt_str)) {
+        return local_str;
+    }
+    return local_str + " (" + pt_str + ")";
+}
 
 }  // namespace
 
@@ -127,7 +173,7 @@ int runPredict(const PredictOptions& opts,
         }
         auto forecast_result = weather_client->getForecast(
             series_config->latitude, series_config->longitude, opts.date,
-            series_config->utc_offset_hours, as_of);
+            series_config->timezone, as_of);
 
         if (!forecast_result.ok()) {
             failures.push_back({series_config->label, "forecast: " + forecast_result.error().message});
@@ -150,6 +196,21 @@ int runPredict(const PredictOptions& opts,
 
         double forecast = *forecast_opt;
         double adjusted = forecast + effective_offset;
+
+        // Pull the local time of high/low and format both station-local and PT.
+        const auto& times_local = series_config->isLowTemp()
+            ? forecast_result.value().daily.time_of_min
+            : forecast_result.value().daily.time_of_max;
+        std::string peak;
+        int64_t peak_utc_epoch = 0;
+        double peak_midnight_dist = -1.0;
+        if (!times_local.empty()) {
+            peak = formatPeakTime(opts.date, times_local[0], series_config->timezone);
+            auto utc = core::parseLocalDatetime(opts.date, times_local[0],
+                                                  series_config->timezone);
+            if (utc) peak_utc_epoch = utc->epoch();
+            peak_midnight_dist = midnightDistanceHours(times_local[0]);
+        }
 
         // Get markets (with delay to avoid rate limiting)
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -198,6 +259,9 @@ int runPredict(const PredictOptions& opts,
         p.series = series_config->series_ticker;
         p.forecast = forecast;
         p.adjusted = adjusted;
+        p.peak = peak;
+        p.peak_utc_epoch = peak_utc_epoch;
+        p.peak_midnight_distance_hours = peak_midnight_dist;
         p.between_brackets = (target == nullptr);
         if (target) {
             p.strike = target->displayString();
@@ -205,7 +269,16 @@ int runPredict(const PredictOptions& opts,
             p.margin = margin_from_edge;
             p.bid = target->market->yes_bid_cents();
             p.ask = target->market->yes_ask_cents();
-            p.tradeable = (margin_from_edge >= opts.margin) && (p.ask >= opts.min_price) && (p.ask <= opts.max_price);
+            // A peak that lands within `midnight_margin_hours` of midnight is
+            // suspect — the actual extreme could fall on either calendar day,
+            // so the bracket we landed in might be wrong. Refuse the trade.
+            // Unknown peak (parse failure or empty forecast time) also fails
+            // closed: we can't verify, so don't trade.
+            bool peak_safe = (peak_midnight_dist >= opts.midnight_margin_hours);
+            p.tradeable = (margin_from_edge >= opts.margin)
+                       && (p.ask >= opts.min_price)
+                       && (p.ask <= opts.max_price)
+                       && peak_safe;
         } else {
             p.strike = "---";
             p.ticker = "";
@@ -220,6 +293,21 @@ int runPredict(const PredictOptions& opts,
 
     // Clear progress line
     std::cerr << "\r" << std::string(50, ' ') << "\r";
+
+    // Order rows so the soonest-upcoming peak is at the bottom of the table.
+    // Tier 0 (top): rows with no parseable peak time.
+    // Tier 1: peaks already in the past, oldest first.
+    // Tier 2 (bottom): future peaks, latest first → soonest-future last.
+    int64_t now_epoch = core::DateTime::now().epoch();
+    auto sort_key = [&](const Prediction& p) -> std::tuple<int, int64_t> {
+        if (p.peak_utc_epoch == 0) return {0, 0};
+        if (p.peak_utc_epoch < now_epoch) return {1, p.peak_utc_epoch};
+        return {2, -p.peak_utc_epoch};
+    };
+    std::stable_sort(predictions.begin(), predictions.end(),
+                     [&](const Prediction& a, const Prediction& b) {
+                         return sort_key(a) < sort_key(b);
+                     });
 
     // Output results
     std::cout << "=== PREDICTIONS FOR " << opts.date << " ===\n";
@@ -241,11 +329,12 @@ int runPredict(const PredictOptions& opts,
               << std::setw(10) << "Forecast"
               << std::setw(10) << "Adjusted"
               << std::setw(10) << "Bracket"
+              << std::setw(22) << "Peak (local / PT)"
               << std::setw(8) << "Margin"
               << std::setw(8) << "Bid"
               << std::setw(8) << "Ask"
               << "Signal\n";
-    std::cout << std::string(78, '-') << "\n";
+    std::cout << std::string(100, '-') << "\n";
 
     int tradeable_count = 0;
     for (const auto& p : predictions) {
@@ -257,7 +346,8 @@ int runPredict(const PredictOptions& opts,
                   << std::setw(18) << p.label
                   << std::setw(10) << forecast_buf
                   << std::setw(10) << adjusted_buf
-                  << std::setw(10) << p.strike;
+                  << std::setw(10) << p.strike
+                  << std::setw(22) << (p.peak.empty() ? "-" : p.peak);
 
         if (p.between_brackets) {
             std::cout << std::setw(8) << "---"
@@ -269,9 +359,17 @@ int runPredict(const PredictOptions& opts,
             std::cout << std::setw(8) << margin_buf
                       << std::setw(8) << (std::to_string((int)p.bid) + "¢")
                       << std::setw(8) << (std::to_string((int)p.ask) + "¢");
+            bool peak_near_midnight =
+                (p.peak_midnight_distance_hours >= 0) &&
+                (p.peak_midnight_distance_hours < opts.midnight_margin_hours);
             if (p.tradeable) {
                 std::cout << "BUY";
                 tradeable_count++;
+            } else if (p.margin >= opts.margin
+                    && p.ask >= opts.min_price
+                    && p.ask <= opts.max_price
+                    && peak_near_midnight) {
+                std::cout << "EDGE";
             } else if (p.margin >= opts.margin && p.ask > opts.max_price) {
                 std::cout << "EXPENSIVE";
             } else if (p.margin >= opts.margin && p.ask < opts.min_price) {
@@ -283,9 +381,11 @@ int runPredict(const PredictOptions& opts,
         std::cout << "\n";
     }
 
-    std::cout << std::string(78, '-') << "\n";
+    std::cout << std::string(100, '-') << "\n";
     std::cout << "Tradeable signals: " << tradeable_count << "/" << predictions.size()
-              << " (margin >= " << opts.margin << "°F, ask " << (int)opts.min_price << "-" << (int)opts.max_price << "¢)\n";
+              << " (margin >= " << opts.margin << "°F, ask "
+              << (int)opts.min_price << "-" << (int)opts.max_price << "¢, peak "
+              << opts.midnight_margin_hours << "h+ from midnight)\n";
 
     if (tradeable_count > 0) {
         std::cout << "\nTickers to buy:\n";
