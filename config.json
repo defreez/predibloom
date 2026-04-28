@@ -3,7 +3,10 @@
     {
       "name": "Politics",
       "series": [
-        {"series_ticker": "KXHORMUZNORM", "label": "Strait of Hormuz"}
+        {
+          "series_ticker": "KXHORMUZNORM",
+          "label": "Strait of Hormuz"
+        }
       ]
     },
     {
@@ -13,11 +16,12 @@
           "series_ticker": "KXHIGHNY",
           "label": "NYC High Temp",
           "latitude": 40.7128,
-          "longitude": -74.0060,
+          "longitude": -74.006,
           "nws_station": "KNYC",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXHIGHLAX",
@@ -27,7 +31,8 @@
           "nws_station": "KLAX",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXHIGHCHI",
@@ -37,7 +42,8 @@
           "nws_station": "KORD",
           "offset": 0,
           "entry_hour": 2,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXHIGHAUS",
@@ -47,7 +53,8 @@
           "nws_station": "KAUS",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXHIGHTSEA",
@@ -57,17 +64,19 @@
           "nws_station": "KSEA",
           "offset": 0,
           "entry_hour": 13,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXHIGHTPHX",
           "label": "Phoenix High",
           "latitude": 33.4484,
-          "longitude": -112.0740,
+          "longitude": -112.074,
           "nws_station": "KPHX",
           "offset": 0,
           "entry_hour": 2,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Phoenix"
         },
         {
           "series_ticker": "KXHIGHDEN",
@@ -77,7 +86,8 @@
           "nws_station": "KDEN",
           "offset": 0,
           "entry_hour": 4,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Denver"
         },
         {
           "series_ticker": "KXHIGHTLV",
@@ -87,17 +97,19 @@
           "nws_station": "KLAS",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXHIGHTMIN",
           "label": "Minneapolis High",
           "latitude": 44.9778,
-          "longitude": -93.2650,
+          "longitude": -93.265,
           "nws_station": "KMSP",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXHIGHTDC",
@@ -107,7 +119,8 @@
           "nws_station": "KDCA",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXHIGHTSFO",
@@ -117,17 +130,19 @@
           "nws_station": "KSFO",
           "offset": 0,
           "entry_hour": 4,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXHIGHTDAL",
           "label": "Dallas High",
           "latitude": 32.7767,
-          "longitude": -96.7970,
+          "longitude": -96.797,
           "nws_station": "KDFW",
           "offset": 0,
           "entry_hour": 1,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXHIGHMIA",
@@ -137,7 +152,8 @@
           "nws_station": "KMIA",
           "offset": 0,
           "entry_hour": 12,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXHIGHTSATX",
@@ -147,7 +163,8 @@
           "nws_station": "KSAT",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXHIGHTBOS",
@@ -157,17 +174,19 @@
           "nws_station": "KBOS",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXHIGHTATL",
           "label": "Atlanta High",
-          "latitude": 33.7490,
-          "longitude": -84.3880,
+          "latitude": 33.749,
+          "longitude": -84.388,
           "nws_station": "KATL",
           "offset": 0,
           "entry_hour": 2,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXHIGHPHIL",
@@ -177,7 +196,8 @@
           "nws_station": "KPHL",
           "offset": 0,
           "entry_hour": 6,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXHIGHTOKC",
@@ -187,7 +207,8 @@
           "nws_station": "KOKC",
           "offset": 0,
           "entry_hour": 1,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXHIGHTHOU",
@@ -197,7 +218,8 @@
           "nws_station": "KIAH",
           "offset": 0,
           "entry_hour": 18,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         }
       ]
     },
@@ -208,11 +230,12 @@
           "series_ticker": "KXLOWTNYC",
           "label": "NYC Low",
           "latitude": 40.7128,
-          "longitude": -74.0060,
+          "longitude": -74.006,
           "nws_station": "KNYC",
           "offset": 0,
           "entry_hour": 3,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXLOWTLAX",
@@ -222,7 +245,8 @@
           "nws_station": "KLAX",
           "offset": 0,
           "entry_hour": 6,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXLOWTCHI",
@@ -232,7 +256,8 @@
           "nws_station": "KORD",
           "offset": 0,
           "entry_hour": 7,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXLOWTAUS",
@@ -242,7 +267,8 @@
           "nws_station": "KAUS",
           "offset": 0,
           "entry_hour": 22,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXLOWTSEA",
@@ -252,17 +278,19 @@
           "nws_station": "KSEA",
           "offset": 0,
           "entry_hour": 16,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXLOWTPHX",
           "label": "Phoenix Low",
           "latitude": 33.4484,
-          "longitude": -112.0740,
+          "longitude": -112.074,
           "nws_station": "KPHX",
           "offset": 0,
           "entry_hour": 15,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Phoenix"
         },
         {
           "series_ticker": "KXLOWTDEN",
@@ -272,7 +300,8 @@
           "nws_station": "KDEN",
           "offset": 0,
           "entry_hour": 6,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Denver"
         },
         {
           "series_ticker": "KXLOWTLV",
@@ -282,17 +311,19 @@
           "nws_station": "KLAS",
           "offset": 0,
           "entry_hour": 13,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXLOWTMIN",
           "label": "Minneapolis Low",
           "latitude": 44.9778,
-          "longitude": -93.2650,
+          "longitude": -93.265,
           "nws_station": "KMSP",
           "offset": 0,
           "entry_hour": 1,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXLOWTDC",
@@ -302,7 +333,8 @@
           "nws_station": "KDCA",
           "offset": 0,
           "entry_hour": 1,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXLOWTSFO",
@@ -312,17 +344,19 @@
           "nws_station": "KSFO",
           "offset": 0,
           "entry_hour": 9,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Los_Angeles"
         },
         {
           "series_ticker": "KXLOWTDAL",
           "label": "Dallas Low",
           "latitude": 32.7767,
-          "longitude": -96.7970,
+          "longitude": -96.797,
           "nws_station": "KDFW",
           "offset": 0,
           "entry_hour": 18,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXLOWTMIA",
@@ -332,7 +366,8 @@
           "nws_station": "KMIA",
           "offset": 0,
           "entry_hour": 0,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXLOWTSATX",
@@ -342,7 +377,8 @@
           "nws_station": "KSAT",
           "offset": 0,
           "entry_hour": 17,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXLOWTBOS",
@@ -352,17 +388,19 @@
           "nws_station": "KBOS",
           "offset": 0,
           "entry_hour": 8,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXLOWTATL",
           "label": "Atlanta Low",
-          "latitude": 33.7490,
-          "longitude": -84.3880,
+          "latitude": 33.749,
+          "longitude": -84.388,
           "nws_station": "KATL",
           "offset": 0,
           "entry_hour": 9,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXLOWTPHIL",
@@ -372,7 +410,8 @@
           "nws_station": "KPHL",
           "offset": 0,
           "entry_hour": 5,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/New_York"
         },
         {
           "series_ticker": "KXLOWTOKC",
@@ -382,7 +421,8 @@
           "nws_station": "KOKC",
           "offset": 0,
           "entry_hour": 8,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         },
         {
           "series_ticker": "KXLOWTHOU",
@@ -392,7 +432,8 @@
           "nws_station": "KIAH",
           "offset": 0,
           "entry_hour": 7,
-          "weather_source": "local_nbm"
+          "weather_source": "local_nbm",
+          "timezone": "America/Chicago"
         }
       ]
     }

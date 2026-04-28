@@ -1,6 +1,6 @@
 #include "misc.hpp"
 #include "../../api/local_nbm_client.hpp"
-#include "../../core/time_utils.hpp"
+#include "../../core/datetime.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -68,15 +68,15 @@ int runMfr(const std::string& date) {
 
     api::LocalNbmClient nbm;
     if (!nbm.is_open()) {
-        std::cerr << "Error: NBM cache not available\n";
+        std::cerr << "Error: NBM database not available\n";
         return 1;
     }
 
     // Get forecast using most recent available cycle
-    // Medford is in Pacific Time (UTC-8 standard, UTC-7 daylight)
-    constexpr int MFR_UTC_OFFSET = -8;
+    // Medford is in Pacific Time
+    constexpr const char* MFR_TZ = "America/Los_Angeles";
     std::string now_iso = core::currentUtcDatetimeHour() + ":00:00Z";
-    auto result = nbm.getForecast(MFR_LAT, MFR_LON, target_date, MFR_UTC_OFFSET, now_iso);
+    auto result = nbm.getForecast(MFR_LAT, MFR_LON, target_date, MFR_TZ, now_iso);
     if (!result.ok()) {
         std::cerr << "Error: " << result.error().message << "\n";
         return 1;
@@ -91,9 +91,24 @@ int runMfr(const std::string& date) {
     double high = resp.daily.temperature_2m_max[0];
     double low = resp.daily.temperature_2m_min[0];
 
+    // Convert station-local "HH:MM" to "3pm PDT" using the IANA tz abbreviation.
+    auto format_local = [&](const std::string& hhmm) -> std::string {
+        if (hhmm.empty()) return "";
+        auto utc = core::parseLocalDatetime(target_date, hhmm, MFR_TZ);
+        if (!utc) return "";
+        return core::formatLocalAmPm(*utc, MFR_TZ);
+    };
+
+    std::string time_high = resp.daily.time_of_max.empty() ? "" : format_local(resp.daily.time_of_max[0]);
+    std::string time_low = resp.daily.time_of_min.empty() ? "" : format_local(resp.daily.time_of_min[0]);
+
     std::cout << "MFR (Medford, OR) - " << target_date << "\n";
-    std::cout << "  High: " << std::fixed << std::setprecision(0) << high << "°F\n";
-    std::cout << "  Low:  " << std::fixed << std::setprecision(0) << low << "°F\n";
+    std::cout << "  High: " << std::fixed << std::setprecision(0) << high << "°F";
+    if (!time_high.empty()) std::cout << " @ " << time_high;
+    std::cout << "\n";
+    std::cout << "  Low:  " << std::fixed << std::setprecision(0) << low << "°F";
+    if (!time_low.empty()) std::cout << " @ " << time_low;
+    std::cout << "\n";
 
     return 0;
 }

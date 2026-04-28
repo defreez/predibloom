@@ -20,10 +20,14 @@ struct DailyForecast {
     int cycle_hour = 0;          // 1, 7, 13, or 19
     std::string cycle_date;      // YYYY-MM-DD of the cycle
     int hours_fetched = 0;
+
+    // Time of high/low (HH:MM in local time, optional)
+    std::string time_of_max;
+    std::string time_of_min;
 };
 
 // SQLite database for forecast data.
-// Default location: ~/.cache/predibloom/forecasts.db
+// Default location: ~/.local/share/predibloom/predibloom.db
 class ForecastDb {
 public:
     ForecastDb();

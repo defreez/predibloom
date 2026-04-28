@@ -43,6 +43,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cli11)
 
+# indicators v2.3 (progress bars)
+FetchContent_Declare(
+    indicators
+    GIT_REPOSITORY https://github.com/p-ranav/indicators.git
+    GIT_TAG v2.3
+)
+FetchContent_MakeAvailable(indicators)
+
 # Google Test v1.15.2
 FetchContent_Declare(
     googletest
@@ -51,6 +59,16 @@ FetchContent_Declare(
 )
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
+
+# Howard Hinnant's date / tz library v3.0.4 (IANA timezone support)
+FetchContent_Declare(
+    date
+    GIT_REPOSITORY https://github.com/HowardHinnant/date.git
+    GIT_TAG v3.0.4
+)
+set(USE_SYSTEM_TZ_DB ON CACHE BOOL "" FORCE)
+set(BUILD_TZ_LIB ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(date)
 
 # Find OpenSSL for cpp-httplib HTTPS support
 find_package(OpenSSL REQUIRED)
@@ -108,6 +126,7 @@ target_link_libraries(predibloom_core PUBLIC
     OpenSSL::Crypto
     SQLite3::SQLite3
     netCDF::netcdf
+    date::date-tz
     ${ECCODES_LIBRARIES}
 )
 
@@ -144,6 +163,7 @@ add_executable(predibloom-cli
 target_link_libraries(predibloom-cli PRIVATE
     predibloom_core
     CLI11::CLI11
+    indicators::indicators
 )
 
 # CLI test for API client (no GUI dependencies)

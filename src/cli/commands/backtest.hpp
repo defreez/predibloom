@@ -23,8 +23,8 @@ struct BacktestOptions {
     std::vector<int> latency_sweep;        // For latency sweep: test multiple latencies
 };
 
-// Backtest always uses local SQLite cache (LocalKalshiClient).
-// Run 'kalshi sync' first to populate the cache.
+// Backtest uses local SQLite database (LocalKalshiClient).
+// Run 'kalshi sync' first to populate the database.
 int runBacktest(const BacktestOptions& opts,
                 const core::Config& config);
 

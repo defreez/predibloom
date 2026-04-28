@@ -9,9 +9,9 @@
 
 namespace predibloom::api {
 
-// Client for reading NBM forecasts from the local ForecastDb.
+// Client for reading NBM forecasts from the local database.
+// Fetches from grid files and stores to SQLite for fast queries.
 // Returns WeatherResponse matching GribStreamClient's interface.
-// Data must be pre-populated via `nbm download` command.
 class LocalNbmClient {
 public:
     LocalNbmClient();
@@ -22,14 +22,14 @@ public:
     LocalNbmClient& operator=(const LocalNbmClient&) = delete;
 
     // Forecast for a single local date.
-    // utc_offset_hours: timezone offset from UTC (e.g., -5 for EST, -8 for PST)
-    //                   Used to determine which hours of the day to fetch.
+    // timezone: IANA name (e.g., "America/New_York"). Resolves which UTC hours
+    //           cover the local calendar day; handles DST automatically.
     // If asOf_iso is non-empty, restricts to forecasts issued on or before that moment
     // (ISO-8601 UTC, e.g., "2025-05-01T04:00:00Z").
     Result<WeatherResponse> getForecast(double latitude,
                                          double longitude,
                                          const std::string& date,
-                                         int utc_offset_hours,
+                                         const std::string& timezone,
                                          const std::string& asOf_iso = "");
 
     // Shortest-lead (near-analysis) temps for a single local date, used as actuals.
@@ -37,7 +37,7 @@ public:
     Result<WeatherResponse> getActuals(double latitude,
                                         double longitude,
                                         const std::string& date,
-                                        int utc_offset_hours);
+                                        const std::string& timezone);
 
     // Set the database path (for testing).
     void setDbPath(const std::string& path);
@@ -48,7 +48,7 @@ public:
     // Check if database is open.
     bool is_open() const;
 
-    // No-op for interface compatibility. SQLite data is always persistent.
+    // No-op for interface compatibility.
     void setCaching(bool /*enabled*/) {}
 
 private:
@@ -60,15 +60,15 @@ private:
     std::vector<int> computeForecastHours(const std::string& cycle_date,
                                            int cycle_hour,
                                            const std::string& target_date,
-                                           int utc_offset_hours);
+                                           const std::string& timezone);
 
-    // Fetch from grid files and cache to SQLite.
+    // Fetch from grid files and store to SQLite.
     Result<WeatherResponse> fetchFromGrid(double latitude,
                                            double longitude,
                                            const std::string& target_date,
                                            const std::string& cycle_date,
                                            int cycle_hour,
-                                           int utc_offset_hours);
+                                           const std::string& timezone);
 
     std::unique_ptr<ForecastDb> db_;
     std::unique_ptr<NbmGridReader> grid_reader_;

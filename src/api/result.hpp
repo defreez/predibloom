@@ -9,7 +9,8 @@ enum class ApiError {
     NetworkError,
     HttpError,
     ParseError,
-    RateLimitError
+    RateLimitError,
+    DataError  // Incomplete or invalid data in database
 };
 
 struct Error {

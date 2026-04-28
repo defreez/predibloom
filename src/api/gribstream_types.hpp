@@ -14,6 +14,8 @@ struct DailyWeatherData {
     std::vector<std::string> time;           // YYYY-MM-DD
     std::vector<double> temperature_2m_max;  // daily high (Fahrenheit)
     std::vector<double> temperature_2m_min;  // daily low (Fahrenheit)
+    std::vector<std::string> time_of_max;    // local time of high (HH:MM)
+    std::vector<std::string> time_of_min;    // local time of low (HH:MM)
 };
 
 struct WeatherResponse {
