@@ -84,12 +84,10 @@ void ForecastDb::create_schema() {
     sqlite3_exec(db_, "ALTER TABLE nbm_forecasts ADD COLUMN time_of_max TEXT;", nullptr, nullptr, nullptr);
     sqlite3_exec(db_, "ALTER TABLE nbm_forecasts ADD COLUMN time_of_min TEXT;", nullptr, nullptr, nullptr);
 
-    // One-time cleanup: prior versions accepted partial-coverage cycles and
-    // wrote rows where hours_fetched is tiny. A single hour at the day
-    // boundary masquerading as daily min/max poisons predict, and the rows
-    // shadow fresh fetches because the PK lacks cycle_date. Purge them —
-    // predict / nbm extract will regenerate from grid files on next use.
-    sqlite3_exec(db_, "DELETE FROM nbm_forecasts WHERE hours_fetched < 20;",
+    // Purge rows from prior versions that accepted partial-coverage cycles.
+    // Anything under 24 hours can have the daily extreme in the missing
+    // window — better to refetch from grid files than serve a wrong row.
+    sqlite3_exec(db_, "DELETE FROM nbm_forecasts WHERE hours_fetched < 24;",
                  nullptr, nullptr, nullptr);
 }
 

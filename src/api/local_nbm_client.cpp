@@ -132,10 +132,12 @@ Result<WeatherResponse> LocalNbmClient::fetchFromGrid(double latitude,
         return Error(ApiError::HttpError, "No temperature data in grid files");
     }
 
-    // Reject cycles that don't substantially cover the target's local day.
-    // A complete local day has ~24 forecast hours; require most of them so we
-    // don't treat a single hour at the day boundary as the "daily" min/max.
-    constexpr size_t kMinCoverageHours = 20;
+    // Require full 24-hour coverage of the target's local day. Even one
+    // missing hour can contain the actual daily min or max, so any partial
+    // cycle is unsafe for trading. (DST transition days are 23 or 25 hours;
+    // those will fail this check and fall through to a different cycle —
+    // accept that rare miss rather than risk a wrong "daily" extreme.)
+    constexpr size_t kMinCoverageHours = 24;
     if (temps_k.size() < kMinCoverageHours) {
         return Error(ApiError::HttpError,
                      "Insufficient coverage: only " + std::to_string(temps_k.size()) +
